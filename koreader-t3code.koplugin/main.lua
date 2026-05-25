@@ -30,38 +30,68 @@ local T3Code = WidgetContainer:extend{
 
 local max_chat_chars = 20000
 
-local function cloneTable(value, seen)
-    if type(value) ~= "table" then
-        return value
-    end
-    seen = seen or {}
-    if seen[value] then
-        return seen[value]
-    end
-    local copy = {}
-    seen[value] = copy
-    for key, child in pairs(value) do
-        copy[cloneTable(key, seen)] = cloneTable(child, seen)
-    end
-    return copy
+local function chatKeyboardKeys()
+    return {
+        {
+            { "Q", "q", "1", "!" },
+            { "W", "w", "2", "@" },
+            { "E", "e", "3", "#" },
+            { "R", "r", "4", "$" },
+            { "T", "t", "5", "%" },
+            { "Y", "y", "6", "^" },
+            { "U", "u", "7", "&" },
+            { "I", "i", "8", "*" },
+            { "O", "o", "9", "(" },
+            { "P", "p", "0", ")" },
+        },
+        {
+            { "A", "a", "-", "_" },
+            { "S", "s", "+", "=" },
+            { "D", "d", "/", "\\" },
+            { "F", "f", ":", ";" },
+            { "G", "g", "'", "\"" },
+            { "H", "h", "<", ">" },
+            { "J", "j", "[", "]" },
+            { "K", "k", "{", "}" },
+            { "L", "l", "|", "`" },
+        },
+        {
+            { label = "", width = 1.5 },
+            { "Z", "z", "~", "~" },
+            { "X", "x", "€", "€" },
+            { "C", "c", "£", "£" },
+            { "V", "v", "•", "•" },
+            { "B", "b", "?", "¿" },
+            { "N", "n", "!", "¡" },
+            { "M", "m", ",", "." },
+            { label = "", width = 1.5 },
+        },
+        {
+            { label = "⌥", width = 1.5, bold = true, alt_label = "SYM" },
+            { ",", ",", ",", "," },
+            { ".", ".", ".", "." },
+            { label = "_", " ", " ", " ", " ", width = 3.0 },
+            { label = "←" },
+            { label = "→" },
+            { label = "Send", "\n", "\n", "\n", "\n", width = 1.5 },
+        },
+    }
 end
 
-local function customizeChatKeyboard(input_widget)
+local function useChatKeyboard(input_widget)
     local keyboard = input_widget and input_widget.keyboard
-    if not keyboard or not keyboard.KEYS or #keyboard.KEYS < 2 then
+    if not keyboard then
         return
     end
-
-    -- KOReader keyboard layouts are shared module tables; copy before editing.
-    keyboard.KEYS = cloneTable(keyboard.KEYS)
-    local last_row = keyboard.KEYS[#keyboard.KEYS]
-    local enter_key = last_row and last_row[#last_row]
-    if enter_key then
-        enter_key.label = "Send"
-        enter_key[1], enter_key[2], enter_key[3], enter_key[4] = "\n", "\n", "\n", "\n"
-        enter_key.width = 2.0
-    end
-
+    keyboard.KEYS = chatKeyboardKeys()
+    keyboard.shiftmode_keys = { [""] = true }
+    keyboard.symbolmode_keys = { ["⌥"] = true }
+    keyboard.utf8mode_keys = {}
+    keyboard.umlautmode_keys = {}
+    keyboard.min_layer = 1
+    keyboard.max_layer = 4
+    local keys_height = G_reader_settings:isTrue("keyboard_key_compact") and 48 or 64
+    keyboard.height = Device.screen:scaleBySize(keys_height * #keyboard.KEYS)
     keyboard:initLayer(keyboard.keyboard_layer)
 end
 
@@ -199,7 +229,7 @@ function T3ChatDialog:init()
         enter_callback = self.on_send,
         parent = self,
     }
-    customizeChatKeyboard(self.input_widget)
+    useChatKeyboard(self.input_widget)
 
     if self.buttons then
         self.button_table = ButtonTable:new{
