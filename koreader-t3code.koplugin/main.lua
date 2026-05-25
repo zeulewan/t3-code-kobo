@@ -976,40 +976,7 @@ function T3Code:onT3CodeChatApp()
 end
 
 function T3Code:onT3CodeChat()
-    local dialog
-    dialog = InputDialog:new{
-        title = _("T3 Code"),
-        input = "",
-        input_hint = _("Message a T3 agent"),
-        description = _("Uses modular transport. Current default is local stub."),
-        allow_newline = true,
-        buttons = {
-            {
-                {
-                    text = _("Cancel"),
-                    id = "close",
-                    callback = function()
-                        UIManager:close(dialog)
-                    end,
-                },
-                {
-                    text = _("Send"),
-                    is_enter_default = true,
-                    callback = function()
-                        local message = dialog:getInputText()
-                        local transport = Transport.new()
-                        local ok, response = transport:send(message)
-                        Settings.appendTranscript("You: " .. message)
-                        Settings.appendTranscript("T3: " .. tostring(response))
-                        UIManager:close(dialog)
-                        showMessage((ok and _("Sent") or _("Not sent")) .. "\n" .. tostring(response))
-                    end,
-                },
-            },
-        },
-    }
-    UIManager:show(dialog)
-    dialog:onShowKeyboard()
+    self:onT3CodeApp()
 end
 
 return T3Code
