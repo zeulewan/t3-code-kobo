@@ -1,0 +1,9 @@
+*.log
+*.pid
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+settings.local.lua
+telemetry.ndjson
+.DS_Store
+node_modules/

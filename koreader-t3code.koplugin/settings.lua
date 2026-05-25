@@ -1,0 +1,77 @@
+local Settings = {}
+
+Settings.base_dir = "/mnt/onboard/.adds/t3code-kobo"
+Settings.config_path = Settings.base_dir .. "/settings.lua"
+Settings.transcript_path = Settings.base_dir .. "/transcript.txt"
+
+local defaults = {
+    transport = "http",
+    endpoint = "127.0.0.1:18891",
+    target = "",
+    target_title = "",
+    pairing_token = "",
+}
+
+local function shellQuote(value)
+    return "'" .. tostring(value):gsub("'", "'\\''") .. "'"
+end
+
+local function ensureDir()
+    os.execute("mkdir -p " .. shellQuote(Settings.base_dir))
+end
+
+function Settings.load()
+    ensureDir()
+    local loaded = {}
+    local chunk = loadfile(Settings.config_path)
+    if chunk then
+        local ok, result = pcall(chunk)
+        if ok and type(result) == "table" then
+            loaded = result
+        end
+    end
+    for key, value in pairs(defaults) do
+        if loaded[key] == nil then
+            loaded[key] = value
+        end
+    end
+    return loaded
+end
+
+function Settings.save(config)
+    ensureDir()
+    local file = io.open(Settings.config_path, "w")
+    if not file then
+        return false
+    end
+    file:write("return {\n")
+    for _, key in ipairs({"transport", "endpoint", "target", "target_title", "pairing_token", "crash_report_marker"}) do
+        file:write(string.format("    %s = %q,\n", key, tostring(config[key] or "")))
+    end
+    file:write("}\n")
+    file:close()
+    return true
+end
+
+function Settings.appendTranscript(line)
+    ensureDir()
+    local file = io.open(Settings.transcript_path, "a")
+    if not file then
+        return false
+    end
+    file:write(line .. "\n")
+    file:close()
+    return true
+end
+
+function Settings.readTranscript()
+    local file = io.open(Settings.transcript_path, "r")
+    if not file then
+        return ""
+    end
+    local text = file:read("*a") or ""
+    file:close()
+    return text
+end
+
+return Settings
