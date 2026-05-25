@@ -49,6 +49,36 @@ local function customizeChatKeyboard(input_widget)
     keyboard:initLayer(keyboard.keyboard_layer)
 end
 
+local function smoothPanScroll(widget)
+    if not widget then
+        return
+    end
+    widget.onPanText = function(this, arg, ges)
+        local line_h = this:getLineHeight()
+        if not line_h or line_h <= 0 then
+            return true
+        end
+        local previous_y = this._t3_last_pan_y or 0
+        local current_y = ges.relative and ges.relative.y or previous_y
+        local delta_y = current_y - previous_y
+        local lines = math.floor(math.abs(delta_y) / line_h)
+        if lines > 0 then
+            if delta_y > 0 then
+                this.text_widget:scrollLines(-lines)
+            else
+                this.text_widget:scrollLines(lines)
+            end
+            this._t3_last_pan_y = current_y
+            this:updateScrollBar(true)
+        end
+        return true
+    end
+    widget.onPanReleaseText = function(this)
+        this._t3_last_pan_y = nil
+        return true
+    end
+end
+
 local T3ChatDialog = InputContainer:extend{
     is_always_active = true,
     covers_fullscreen = true,
@@ -60,6 +90,62 @@ local T3ChatDialog = InputContainer:extend{
     on_back = nil,
     on_close = nil,
 }
+
+local T3MenuDialog = InputContainer:extend{
+    covers_fullscreen = true,
+    title = "T3 Code",
+    buttons = nil,
+    on_close = nil,
+}
+
+function T3MenuDialog:init()
+    local screen_w = Device.screen:getWidth()
+    local screen_h = Device.screen:getHeight()
+    self.region = Geom:new{ w = screen_w, h = screen_h }
+    self.title_bar = TitleBar:new{
+        width = screen_w,
+        align = "left",
+        with_bottom_line = true,
+        title = self.title,
+        title_multilines = false,
+        close_callback = self.on_close,
+        show_parent = self,
+    }
+    self.button_table = ButtonTable:new{
+        width = screen_w,
+        buttons = self.buttons,
+        zero_sep = true,
+        show_parent = self,
+    }
+    self.vgroup = VerticalGroup:new{
+        align = "left",
+        self.title_bar,
+        VerticalSpan:new{ width = Size.padding.large },
+        CenterContainer:new{
+            dimen = Geom:new{ w = screen_w, h = self.button_table:getSize().h },
+            self.button_table,
+        },
+    }
+    self.dialog_frame = FrameContainer:new{
+        width = screen_w,
+        height = screen_h,
+        radius = 0,
+        padding = 0,
+        margin = 0,
+        bordersize = 0,
+        background = Blitbuffer.COLOR_WHITE,
+        self.vgroup,
+    }
+    self[1] = self.dialog_frame
+end
+
+function T3MenuDialog:onShow()
+    UIManager:setDirty(nil, "full")
+end
+
+function T3MenuDialog:onCloseWidget()
+    UIManager:setDirty(nil, "full")
+end
 
 function T3ChatDialog:init()
     local screen_w = Device.screen:getWidth()
@@ -121,6 +207,7 @@ function T3ChatDialog:init()
         dialog = self,
         scroll_by_pan = true,
     }
+    smoothPanScroll(self.history_widget)
 
     local widgets = {
         align = "left",
@@ -142,6 +229,8 @@ function T3ChatDialog:init()
     self.vgroup = VerticalGroup:new(widgets)
 
     self.dialog_frame = FrameContainer:new{
+        width = screen_w,
+        height = screen_h - keyboard_h,
         radius = 0,
         padding = 0,
         margin = 0,
@@ -169,6 +258,12 @@ end
 
 function T3ChatDialog:onShowKeyboard()
     self.input_widget:onShowKeyboard()
+end
+
+function T3ChatDialog:closeKeyboard()
+    if self.input_widget then
+        self.input_widget:onCloseKeyboard()
+    end
 end
 
 function T3ChatDialog:getInputText()
@@ -288,16 +383,33 @@ end
 local function parseAgentLines(text)
     local agents = {}
     for line in tostring(text or ""):gmatch("[^\r\n]+") do
-        local id, title, status = line:match("^([^\t]+)\t([^\t]+)\t([^\t]+)")
+        local id, title, status, model, project = line:match("^([^\t]+)\t([^\t]+)\t([^\t]+)\t([^\t]*)\t([^\t]*)")
         if id and title then
             table.insert(agents, {
                 id = id,
                 title = title,
                 status = status or "idle",
+                model = model or "",
+                project = project ~= "" and project or "No project",
             })
         end
     end
     return agents
+end
+
+local function projectGroups(agents)
+    local groups = {}
+    local order = {}
+    for _, agent in ipairs(agents) do
+        local project = agent.project or "No project"
+        if not groups[project] then
+            groups[project] = {}
+            table.insert(order, project)
+        end
+        table.insert(groups[project], agent)
+    end
+    table.sort(order)
+    return groups, order
 end
 
 local function shellQuote(value)
@@ -469,10 +581,13 @@ function T3Code:onT3CodePair()
     dialog:onShowKeyboard()
 end
 
-function T3Code:onT3CodeAgentSelector(open_chat)
+function T3Code:onT3CodeAgentSelector(open_chat, selected_project, page)
     local dialog
     local ok, body = Transport.new():agents()
     local agents = ok and parseAgentLines(body) or {}
+    local groups, projects = projectGroups(agents)
+    local page_size = 8
+    page = page or 1
     local buttons = {}
     table.insert(buttons, {
         {
@@ -495,28 +610,11 @@ function T3Code:onT3CodeAgentSelector(open_chat)
             callback = function()
                 UIManager:close(dialog)
                 UIManager:nextTick(function()
-                    self:onT3CodeAgentSelector(open_chat)
+                    self:onT3CodeAgentSelector(open_chat, selected_project, page)
                 end)
             end,
         },
     })
-    for agent_index, agent in ipairs(agents) do
-        local selected_agent = agent
-        table.insert(buttons, {
-            {
-                text = tostring(agent_index) .. ". " .. selected_agent.title .. " [" .. selected_agent.status .. "]",
-                callback = function()
-                    saveTarget(selected_agent.id, selected_agent.title)
-                    UIManager:close(dialog)
-                    if open_chat then
-                        UIManager:nextTick(function()
-                            self:onT3CodeChatApp()
-                        end)
-                    end
-                end,
-            },
-        })
-    end
     if not ok then
         table.insert(buttons, {
             {
@@ -526,6 +624,129 @@ function T3Code:onT3CodeAgentSelector(open_chat)
                 end,
             },
         })
+    elseif selected_project then
+        local project_agents = groups[selected_project] or {}
+        table.insert(buttons, {
+            {
+                text = "< " .. _("Projects"),
+                callback = function()
+                    UIManager:close(dialog)
+                    UIManager:nextTick(function()
+                        self:onT3CodeAgentSelector(open_chat)
+                    end)
+                end,
+            },
+        })
+        local start_index = (page - 1) * page_size + 1
+        local end_index = math.min(#project_agents, start_index + page_size - 1)
+        for agent_index = start_index, end_index do
+            local selected_agent = project_agents[agent_index]
+            table.insert(buttons, {
+                {
+                    text = tostring(agent_index) .. ". " .. selected_agent.title .. " [" .. selected_agent.status .. "]",
+                    callback = function()
+                        saveTarget(selected_agent.id, selected_agent.title)
+                        UIManager:close(dialog)
+                        if open_chat then
+                            UIManager:nextTick(function()
+                                self:onT3CodeChatApp()
+                            end)
+                        end
+                    end,
+                },
+            })
+        end
+        if #project_agents == 0 then
+            table.insert(buttons, {
+                {
+                    text = _("No agents in project"),
+                    callback = function() end,
+                },
+            })
+        end
+        if #project_agents > page_size then
+            table.insert(buttons, {
+                {
+                    text = page > 1 and _("Prev") or " ",
+                    callback = function()
+                        if page <= 1 then return end
+                        UIManager:close(dialog)
+                        UIManager:nextTick(function()
+                            self:onT3CodeAgentSelector(open_chat, selected_project, page - 1)
+                        end)
+                    end,
+                },
+                {
+                    text = _("Page") .. " " .. tostring(page),
+                    callback = function() end,
+                },
+                {
+                    text = end_index < #project_agents and _("Next") or " ",
+                    callback = function()
+                        if end_index >= #project_agents then return end
+                        UIManager:close(dialog)
+                        UIManager:nextTick(function()
+                            self:onT3CodeAgentSelector(open_chat, selected_project, page + 1)
+                        end)
+                    end,
+                },
+            })
+        end
+    else
+        local start_index = (page - 1) * page_size + 1
+        local end_index = math.min(#projects, start_index + page_size - 1)
+        for project_index = start_index, end_index do
+            local project = projects[project_index]
+            local project_name = project
+            local count = #(groups[project_name] or {})
+            table.insert(buttons, {
+                {
+                    text = tostring(project_index) .. ". " .. project_name .. " (" .. tostring(count) .. ")",
+                    callback = function()
+                        UIManager:close(dialog)
+                        UIManager:nextTick(function()
+                            self:onT3CodeAgentSelector(open_chat, project_name, 1)
+                        end)
+                    end,
+                },
+            })
+        end
+        if #projects > page_size then
+            table.insert(buttons, {
+                {
+                    text = page > 1 and _("Prev") or " ",
+                    callback = function()
+                        if page <= 1 then return end
+                        UIManager:close(dialog)
+                        UIManager:nextTick(function()
+                            self:onT3CodeAgentSelector(open_chat, nil, page - 1)
+                        end)
+                    end,
+                },
+                {
+                    text = _("Page") .. " " .. tostring(page),
+                    callback = function() end,
+                },
+                {
+                    text = end_index < #projects and _("Next") or " ",
+                    callback = function()
+                        if end_index >= #projects then return end
+                        UIManager:close(dialog)
+                        UIManager:nextTick(function()
+                            self:onT3CodeAgentSelector(open_chat, nil, page + 1)
+                        end)
+                    end,
+                },
+            })
+        end
+        if #projects == 0 then
+            table.insert(buttons, {
+                {
+                    text = _("No agents"),
+                    callback = function() end,
+                },
+            })
+        end
     end
     table.insert(buttons, {
         {
@@ -547,7 +768,7 @@ function T3Code:onT3CodeAgentSelector(open_chat)
                                     UIManager:close(custom_dialog)
                                     if open_chat then
                                         UIManager:nextTick(function()
-                                            self:onT3CodeAgentSelector(true)
+                                            self:onT3CodeAgentSelector(true, selected_project, page)
                                         end)
                                     end
                                 end,
@@ -576,15 +797,18 @@ function T3Code:onT3CodeAgentSelector(open_chat)
     })
     table.insert(buttons, {
         {
-            text = _("Close"),
+            text = "X " .. _("Close"),
             callback = function()
                 UIManager:close(dialog)
             end,
         },
     })
-    dialog = ButtonDialog:new{
-        title = _("T3 Code"),
-        width = Device.screen:getWidth(),
+    local title = selected_project and ("T3 Code  " .. selected_project) or _("T3 Code")
+    dialog = T3MenuDialog:new{
+        title = title,
+        on_close = function()
+            UIManager:close(dialog)
+        end,
         buttons = buttons,
     }
     UIManager:show(dialog)
@@ -645,6 +869,9 @@ function T3Code:onT3CodeChatApp()
     end
     local function backToAgents()
         stopPolling()
+        if dialog then
+            dialog:closeKeyboard()
+        end
         UIManager:close(dialog)
         UIManager:nextTick(function()
             self:onT3CodeAgentSelector(true)
@@ -692,6 +919,7 @@ function T3Code:onT3CodeChatApp()
         on_back = backToAgents,
         on_close = function()
             stopPolling()
+            dialog:closeKeyboard()
             UIManager:close(dialog)
         end,
     }
