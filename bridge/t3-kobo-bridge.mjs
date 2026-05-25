@@ -245,7 +245,7 @@ function formatMessageEntry(message) {
   }
   if (message.role === "assistant") {
     const text = stripOperationalLines(message.text);
-    if (text.length > 0 && !isLikelyProgressMessage(text)) {
+    if (text.length > 0) {
       return conciseText(text, 12000);
     }
   }
@@ -610,6 +610,15 @@ async function handleEvents(url, res) {
   const state = await ensureThreadStream(target);
 
   await waitForThreadEvent(state, since, waitMs);
+
+  if (since > state.nextSeq && state.lastText) {
+    state.nextSeq = since;
+    pushThreadEvent(state, {
+      kind: "replace",
+      status: state.status,
+      text: state.lastText,
+    });
+  }
 
   const events = state.events.filter((event) => event.seq > since);
   if (events.length === 0) {
