@@ -30,14 +30,49 @@ local T3Code = WidgetContainer:extend{
 
 local max_chat_chars = 20000
 
+local function cloneTable(value, seen)
+    if type(value) ~= "table" then
+        return value
+    end
+    seen = seen or {}
+    if seen[value] then
+        return seen[value]
+    end
+    local copy = {}
+    seen[value] = copy
+    for key, child in pairs(value) do
+        copy[cloneTable(key, seen)] = cloneTable(child, seen)
+    end
+    return copy
+end
+
+local function keyText(key, layer)
+    local value = key and key[layer or 2]
+    if type(value) == "table" then
+        return value.label or value[1]
+    end
+    return value
+end
+
+local function looksLikeNumberRow(row)
+    if type(row) ~= "table" or #row < 10 then
+        return false
+    end
+    return tostring(keyText(row[1], 2) or keyText(row[1], 1) or "") == "1"
+        and tostring(keyText(row[10], 2) or keyText(row[10], 1) or "") == "0"
+end
+
 local function customizeChatKeyboard(input_widget)
     local keyboard = input_widget and input_widget.keyboard
     if not keyboard or not keyboard.KEYS or #keyboard.KEYS < 2 then
         return
     end
 
-    -- Keep this plugin-local: mutate this input's keyboard instance only.
-    table.remove(keyboard.KEYS, 1)
+    -- KOReader keyboard layouts are shared module tables; copy before editing.
+    keyboard.KEYS = cloneTable(keyboard.KEYS)
+    if looksLikeNumberRow(keyboard.KEYS[1]) then
+        table.remove(keyboard.KEYS, 1)
+    end
     local last_row = keyboard.KEYS[#keyboard.KEYS]
     local enter_key = last_row and last_row[#last_row]
     if enter_key then
