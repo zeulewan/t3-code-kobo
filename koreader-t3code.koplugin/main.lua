@@ -387,28 +387,33 @@ local function chatInputTextFromHistory(history, prompt)
     return history .. prompt_marker .. tostring(prompt or "")
 end
 
-local function latestStreamFrame()
+local function urlDecode(value)
+    value = tostring(value or "")
+    return (value:gsub("%%(%x%x)", function(hex)
+        return string.char(tonumber(hex, 16))
+    end))
+end
+
+local function latestEventFrame()
     local file = io.open(stream_path, "r")
     if not file then
         return nil
     end
     local text = file:read("*a") or ""
     file:close()
-    local marker = string.char(30)
-    local last_marker
-    local search_from = 1
-    while true do
-        local found = text:find(marker, search_from, true)
-        if not found then
-            break
+    local rendered
+    for line in text:gmatch("[^\r\n]+") do
+        local _seq, kind, _status, encoded = line:match("^([0-9]+)\t([^\t]*)\t([^\t]*)\t(.*)$")
+        if kind == "replace" then
+            rendered = urlDecode(encoded)
+        elseif kind == "append" then
+            rendered = tostring(rendered or "") .. urlDecode(encoded)
         end
-        last_marker = found
-        search_from = found + 1
     end
-    if not last_marker then
+    if rendered == nil or rendered == "" then
         return nil
     end
-    return text:sub(last_marker + 1)
+    return rendered
 end
 
 local function outgoingMessage(text)
@@ -873,7 +878,6 @@ function T3Code:onT3CodeChatApp()
     local poll_count = 0
     local last_rendered = nil
     local stream_pid = nil
-    local pending_message = nil
 
     local function stopPolling()
         if poll_task then
@@ -899,23 +903,36 @@ function T3Code:onT3CodeChatApp()
     local function pollChat()
         poll_task = nil
         poll_count = poll_count + 1
-        local frame = latestStreamFrame()
+        local frame = latestEventFrame()
         if frame then
             local rendered = frame
             if rendered ~= last_rendered then
-                if not pending_message or rendered:find(pending_message, 1, true) or poll_count > 8 then
-                    pending_message = nil
-                    last_rendered = rendered
-                    dialog:setHistory(rendered)
-                end
+                last_rendered = rendered
+                dialog:setHistory(rendered)
             end
         end
-        if poll_count < 120 then
+        if stream_pid then
             poll_task = UIManager:scheduleIn(1, pollChat)
-        else
-            stopPolling()
         end
     end
+
+    local function startPolling()
+        if stream_pid then
+            return
+        end
+        poll_count = 0
+        local stream_ok, stream_result = Transport.new():startStream(stream_path, 10)
+        if stream_ok then
+            stream_pid = stream_result
+            poll_task = UIManager:scheduleIn(1, pollChat)
+        else
+            showMessage(tostring(stream_result))
+            poll_task = UIManager:scheduleIn(3, function()
+                refreshChat(false)
+            end)
+        end
+    end
+
     local function backToAgents()
         stopPolling()
         if dialog then
@@ -933,29 +950,14 @@ function T3Code:onT3CodeChatApp()
         end
         local ok, response = Transport.new():send(message)
         Settings.appendTranscript("You: " .. message)
-        Settings.appendTranscript("T3: " .. tostring(response))
         if not ok then
+            Settings.appendTranscript("T3: " .. tostring(response))
             showMessage(tostring(response))
             return
         end
 
-        pending_message = message
         dialog:setInputText("")
-        dialog:setHistory((last_rendered or transcriptPreview()) .. "\n\nYou: " .. message)
-        last_rendered = dialog.history
-
-        stopPolling()
-        poll_count = 0
-        local stream_ok, stream_result = Transport.new():startStream(stream_path, 10)
-        if stream_ok then
-            stream_pid = stream_result
-            poll_task = UIManager:scheduleIn(1, pollChat)
-        else
-            showMessage(tostring(stream_result))
-            poll_task = UIManager:scheduleIn(3, function()
-                refreshChat(false)
-            end)
-        end
+        startPolling()
     end
 
     dialog = T3ChatDialog:new{
@@ -973,6 +975,7 @@ function T3Code:onT3CodeChatApp()
     last_rendered = dialog.history
     UIManager:show(dialog)
     dialog:onShowKeyboard()
+    startPolling()
 end
 
 return T3Code

@@ -85,12 +85,22 @@ function Http.thread(config, limit)
 end
 
 function Http.startStream(config, path, limit)
-    local url = normalizeEndpoint(config.endpoint)
-        .. "/stream?target=" .. urlEncode(config.target or "")
+    local url_prefix = normalizeEndpoint(config.endpoint)
+        .. "/events?target=" .. urlEncode(config.target or "")
         .. "&limit=" .. urlEncode(limit or 10)
-        .. "&seconds=120&interval_ms=1500"
+        .. "&wait_ms=25000&since="
     os.remove(path)
-    local cmd = "wget -q -T 130 -O " .. shellQuote(path) .. " " .. shellQuote(url) .. " >/dev/null 2>&1 & echo $!"
+    local tmp = path .. ".tmp"
+    local script = "since=0; : > " .. shellQuote(path)
+        .. "; while :; do "
+        .. "url=" .. shellQuote(url_prefix) .. "\"$since\"; "
+        .. "if wget -q -T 35 -O " .. shellQuote(tmp) .. " \"$url\"; then "
+        .. "cat " .. shellQuote(tmp) .. " >> " .. shellQuote(path) .. "; "
+        .. "last=$(awk -F '\\t' '($1+0)>m{m=$1} END{if(m)print m}' " .. shellQuote(tmp) .. "); "
+        .. "[ -n \"$last\" ] && since=\"$last\"; "
+        .. "fi; rm -f " .. shellQuote(tmp) .. "; sleep 1; "
+        .. "done"
+    local cmd = "sh -c " .. shellQuote(script) .. " >/dev/null 2>&1 & echo $!"
     local handle = io.popen(cmd)
     if not handle then
         return false, "Could not start stream."

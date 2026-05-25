@@ -12,13 +12,17 @@ const runtimeStatePath =
   process.env.T3_KOBO_RUNTIME_STATE ?? `${baseDir.replace(/\/+$/, "")}/userdata/server-runtime.json`;
 const telemetryLogPath =
   process.env.T3_KOBO_TELEMETRY_LOG ?? `${baseDir.replace(/\/+$/, "")}/kobo-bridge/telemetry.ndjson`;
+const t3CodeRepo = process.env.T3_KOBO_T3CODE_REPO ?? `${process.env.HOME ?? "."}/GIT/t3code`;
 const maxMessageBytes = 12 * 1024;
 const defaultLimit = 10;
+const maxThreadEvents = 256;
 
 let cachedSession = null;
 let cachedSnapshot = null;
 let cachedSnapshotAt = 0;
 let snapshotRefreshPromise = null;
+let wsRuntimePromise = null;
+const threadStreams = new Map();
 
 function respond(res, status, body, contentType = "text/plain; charset=utf-8") {
   res.writeHead(status, {
@@ -234,31 +238,298 @@ function stripOperationalLines(text) {
     .trim();
 }
 
+function formatMessageEntry(message) {
+  if (message.role === "user") {
+    const text = conciseText(message.text, 4000);
+    return text.length > 0 ? `You: ${text}` : "";
+  }
+  if (message.role === "assistant") {
+    const text = stripOperationalLines(message.text);
+    if (text.length > 0 && !isLikelyProgressMessage(text)) {
+      return conciseText(text, 12000);
+    }
+  }
+  return "";
+}
+
 function formatThreadText(thread, limit) {
   const entries = [];
   for (const message of thread.messages) {
-    if (message.role === "user") {
-      const text = conciseText(message.text, 900);
-      if (text.length > 0) {
-        entries.push(`You: ${text}`);
-      }
-      continue;
-    }
-    if (message.role === "assistant") {
-      const text = stripOperationalLines(message.text);
-      if (text.length > 0 && !isLikelyProgressMessage(text)) {
-        const response = conciseText(text, 2200);
-        if (entries[entries.length - 1] !== response) {
-          entries.push(response);
-        }
-      }
+    const entry = formatMessageEntry(message);
+    if (entry.length > 0 && entries[entries.length - 1] !== entry) {
+      entries.push(entry);
     }
   }
-  const visibleEntries = entries.slice(-limit * 2);
+  const visibleEntries = entries.slice(-limit);
   if (visibleEntries.length === 0) {
     return "No messages yet.\n";
   }
   return `${visibleEntries.join("\n\n")}\n`;
+}
+
+function encodeField(value) {
+  return encodeURIComponent(String(value ?? ""));
+}
+
+function encodeEventLine(event) {
+  return [
+    event.seq,
+    event.kind,
+    event.status ?? "",
+    encodeField(event.text ?? ""),
+  ].join("\t");
+}
+
+function threadTextEventKind(previousText, nextText) {
+  if (previousText && nextText.startsWith(previousText)) {
+    return "append";
+  }
+  return "replace";
+}
+
+function loadWsRuntime() {
+  if (!wsRuntimePromise) {
+    wsRuntimePromise = import(`file://${t3CodeRepo.replace(/\/+$/, "")}/packages/client-runtime/src/index.ts`);
+  }
+  return wsRuntimePromise;
+}
+
+async function resolveWsUrl() {
+  const origin = await readRuntimeOrigin();
+  const session = await getSession();
+  const response = await fetch(`${origin}/api/auth/ws-token`, {
+    method: "POST",
+    headers: {
+      accept: "application/json",
+      authorization: `Bearer ${session.token}`,
+    },
+  });
+  if (!response.ok) {
+    throw new Error(`Could not issue T3 websocket token: HTTP ${response.status}`);
+  }
+  const body = await response.json();
+  if (!body.token) {
+    throw new Error("T3 websocket token response did not include a token.");
+  }
+  const url = new URL(origin.replace(/^http:/, "ws:").replace(/^https:/, "wss:"));
+  url.pathname = "/ws";
+  url.searchParams.set("wsToken", body.token);
+  return url.toString();
+}
+
+function notifyThreadWaiters(state) {
+  const waiters = Array.from(state.waiters);
+  state.waiters.clear();
+  for (const waiter of waiters) {
+    waiter();
+  }
+}
+
+function pushThreadEvent(state, event) {
+  const enriched = {
+    ...event,
+    seq: state.nextSeq + 1,
+    status: event.status ?? (state.thread ? threadStatus(state.thread) : state.status),
+  };
+  state.nextSeq = enriched.seq;
+  state.events.push(enriched);
+  if (state.events.length > maxThreadEvents) {
+    state.events.splice(0, state.events.length - maxThreadEvents);
+  }
+  notifyThreadWaiters(state);
+}
+
+function pushThreadTextIfChanged(state, nextText, forceKind) {
+  if (nextText === state.lastText) {
+    return;
+  }
+  const kind = forceKind ?? threadTextEventKind(state.lastText, nextText);
+  const text = kind === "append" ? nextText.slice(state.lastText.length) : nextText;
+  state.lastText = nextText;
+  pushThreadEvent(state, {
+    kind,
+    text,
+  });
+}
+
+function pushThreadAppend(state, text) {
+  if (!text) {
+    return;
+  }
+  state.lastText = `${state.lastText}${text}`;
+  pushThreadEvent(state, {
+    kind: "append",
+    text,
+  });
+}
+
+function seedMessageTextState(state, thread) {
+  state.messageTextById.clear();
+  for (const message of thread.messages) {
+    state.messageTextById.set(message.id, formatMessageEntry(message));
+  }
+}
+
+function waitForThreadEvent(state, since, waitMs) {
+  if (state.events.some((event) => event.seq > since)) {
+    return Promise.resolve();
+  }
+  if (waitMs <= 0) {
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      state.waiters.delete(done);
+      resolve();
+    }, waitMs);
+    const done = () => {
+      clearTimeout(timer);
+      resolve();
+    };
+    state.waiters.add(done);
+  });
+}
+
+function closeThreadStream(state) {
+  try {
+    state.unsubscribe?.();
+  } catch {
+    // Ignore cleanup failures.
+  }
+  const disposed = state.transport?.dispose?.();
+  if (disposed && typeof disposed.catch === "function") {
+    void disposed.catch(() => undefined);
+  }
+  state.closed = true;
+  notifyThreadWaiters(state);
+}
+
+function handleThreadStreamItem(state, item, applyThreadDetailEvent) {
+  if (item.kind === "snapshot") {
+    state.thread = item.snapshot.thread;
+    state.status = threadStatus(state.thread);
+    seedMessageTextState(state, state.thread);
+    pushThreadTextIfChanged(state, formatThreadText(state.thread, defaultLimit), "replace");
+    return;
+  }
+
+  if (item.kind !== "event" || !state.thread) {
+    return;
+  }
+
+  const event = item.event;
+  const isMessageEvent = event.type === "thread.message-sent";
+  const messageId = isMessageEvent ? event.payload.messageId : null;
+  const beforeMessageText = messageId ? (state.messageTextById.get(messageId) ?? "") : "";
+  const result = applyThreadDetailEvent(state.thread, event);
+  if (result.kind === "deleted") {
+    pushThreadEvent(state, {
+      kind: "replace",
+      status: "deleted",
+      text: "Thread deleted.\n",
+    });
+    closeThreadStream(state);
+    return;
+  }
+  if (result.kind !== "updated") {
+    return;
+  }
+
+  state.thread = result.thread;
+  state.status = threadStatus(state.thread);
+
+  if (isMessageEvent && messageId) {
+    const message = state.thread.messages.find((entry) => entry.id === messageId);
+    const afterMessageText = message ? formatMessageEntry(message) : "";
+    state.messageTextById.set(messageId, afterMessageText);
+    if (afterMessageText !== beforeMessageText) {
+      if (beforeMessageText && afterMessageText.startsWith(beforeMessageText)) {
+        pushThreadAppend(state, afterMessageText.slice(beforeMessageText.length));
+      } else if (!beforeMessageText) {
+        pushThreadAppend(state, `${state.lastText ? "\n\n" : ""}${afterMessageText}`);
+      } else {
+        pushThreadTextIfChanged(state, formatThreadText(state.thread, defaultLimit), "replace");
+      }
+      return;
+    }
+  }
+
+  pushThreadTextIfChanged(state, formatThreadText(state.thread, defaultLimit));
+}
+
+async function ensureThreadStream(target) {
+  const snapshot = await getSnapshotCached({ allowStale: true, maxAgeMs: 5_000 });
+  const thread = findThread(snapshot, target);
+  if (!thread) {
+    throw new Error(`No active T3 thread found for '${target || defaultTarget}'.`);
+  }
+
+  const existing = threadStreams.get(thread.id);
+  if (existing && !existing.closed) {
+    existing.lastTouchedAt = Date.now();
+    return existing;
+  }
+
+  const { WsTransport, createWsRpcClient, applyThreadDetailEvent } = await loadWsRuntime();
+  const state = {
+    threadId: thread.id,
+    title: thread.title,
+    target: target || defaultTarget,
+    thread: null,
+    status: threadStatus(thread),
+    lastText: "",
+    nextSeq: 0,
+    events: [],
+    waiters: new Set(),
+    messageTextById: new Map(),
+    lastTouchedAt: Date.now(),
+    closed: false,
+    transport: null,
+    unsubscribe: null,
+  };
+
+  const transport = new WsTransport(
+    resolveWsUrl,
+    {
+      onOpen: () => {
+        pushThreadEvent(state, { kind: "status", status: state.status, text: "connected" });
+      },
+      onError: (message) => {
+        pushThreadEvent(state, { kind: "status", status: "error", text: message });
+      },
+      onClose: (details) => {
+        pushThreadEvent(state, {
+          kind: "status",
+          status: "closed",
+          text: `websocket closed ${details.code}`,
+        });
+      },
+    },
+    {
+      logWarning: (message, metadata) => {
+        pushThreadEvent(state, {
+          kind: "status",
+          status: "warning",
+          text: `${message}: ${metadata.error}`,
+        });
+      },
+    },
+  );
+  const client = createWsRpcClient(transport);
+  state.transport = transport;
+  state.unsubscribe = client.orchestration.subscribeThread(
+    { threadId: thread.id },
+    (item) => handleThreadStreamItem(state, item, applyThreadDetailEvent),
+    {
+      onResubscribe: () => {
+        state.lastText = "";
+        pushThreadEvent(state, { kind: "status", status: "reconnecting", text: "resubscribing" });
+      },
+    },
+  );
+
+  threadStreams.set(thread.id, state);
+  return state;
 }
 
 function makeTurnCommand(thread, message) {
@@ -330,6 +601,22 @@ async function handleThread(url, res) {
     return;
   }
   respond(res, 200, formatThreadText(thread, limit));
+}
+
+async function handleEvents(url, res) {
+  const target = url.searchParams.get("target") ?? defaultTarget;
+  const since = Math.max(0, Number.parseInt(url.searchParams.get("since") ?? "0", 10) || 0);
+  const waitMs = Math.max(0, Math.min(30_000, Number.parseInt(url.searchParams.get("wait_ms") ?? "25000", 10) || 0));
+  const state = await ensureThreadStream(target);
+
+  await waitForThreadEvent(state, since, waitMs);
+
+  const events = state.events.filter((event) => event.seq > since);
+  if (events.length === 0) {
+    respond(res, 200, `${state.nextSeq}\theartbeat\t${state.status ?? ""}\t\n`);
+    return;
+  }
+  respond(res, 200, `${events.map(encodeEventLine).join("\n")}\n`);
 }
 
 function wait(ms) {
@@ -452,6 +739,8 @@ const server = http.createServer((req, res) => {
         ? () => handleAgents(url, res)
         : url.pathname === "/thread"
         ? () => handleThread(url, res)
+        : url.pathname === "/events"
+        ? () => handleEvents(url, res)
         : url.pathname === "/stream"
         ? () => handleStream(url, res)
         : url.pathname === "/send"
