@@ -46,22 +46,6 @@ local function cloneTable(value, seen)
     return copy
 end
 
-local function keyText(key, layer)
-    local value = key and key[layer or 2]
-    if type(value) == "table" then
-        return value.label or value[1]
-    end
-    return value
-end
-
-local function looksLikeNumberRow(row)
-    if type(row) ~= "table" or #row < 10 then
-        return false
-    end
-    return tostring(keyText(row[1], 2) or keyText(row[1], 1) or "") == "1"
-        and tostring(keyText(row[10], 2) or keyText(row[10], 1) or "") == "0"
-end
-
 local function customizeChatKeyboard(input_widget)
     local keyboard = input_widget and input_widget.keyboard
     if not keyboard or not keyboard.KEYS or #keyboard.KEYS < 2 then
@@ -70,9 +54,6 @@ local function customizeChatKeyboard(input_widget)
 
     -- KOReader keyboard layouts are shared module tables; copy before editing.
     keyboard.KEYS = cloneTable(keyboard.KEYS)
-    if looksLikeNumberRow(keyboard.KEYS[1]) then
-        table.remove(keyboard.KEYS, 1)
-    end
     local last_row = keyboard.KEYS[#keyboard.KEYS]
     local enter_key = last_row and last_row[#last_row]
     if enter_key then
@@ -81,8 +62,6 @@ local function customizeChatKeyboard(input_widget)
         enter_key.width = 2.0
     end
 
-    local keys_height = G_reader_settings:isTrue("keyboard_key_compact") and 48 or 64
-    keyboard.height = Device.screen:scaleBySize(keys_height * #keyboard.KEYS)
     keyboard:initLayer(keyboard.keyboard_layer)
 end
 
