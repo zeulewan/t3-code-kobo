@@ -541,8 +541,8 @@ end
 function T3Code:onDispatcherRegisterActions()
     Dispatcher:registerAction("t3code_chat", {
         category = "none",
-        event = "T3CodeChat",
-        title = _("T3 Code chat"),
+        event = "T3CodeApp",
+        title = _("T3 Code"),
         general = true,
     })
     Dispatcher:registerAction("t3code_pair", {
@@ -973,10 +973,6 @@ function T3Code:onT3CodeChatApp()
     last_rendered = dialog.history
     UIManager:show(dialog)
     dialog:onShowKeyboard()
-end
-
-function T3Code:onT3CodeChat()
-    self:onT3CodeApp()
 end
 
 return T3Code
