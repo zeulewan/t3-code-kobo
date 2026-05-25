@@ -68,12 +68,8 @@ local function chatKeyboardKeys()
         },
         {
             { label = "⌥", width = 1.5, bold = true, alt_label = "SYM" },
-            { ",", ",", ",", "," },
-            { ".", ".", ".", "." },
-            { label = "_", " ", " ", " ", " ", width = 3.0 },
-            { label = "←" },
-            { label = "→" },
-            { label = "Send", "\n", "\n", "\n", "\n", width = 1.5 },
+            { label = "_", " ", " ", " ", " ", width = 6.0 },
+            { label = "Send", "\n", "\n", "\n", "\n", width = 2.5 },
         },
     }
 end
