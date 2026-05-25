@@ -1,8 +1,22 @@
 local Dispatcher = require("dispatcher") -- luacheck:ignore
+local Blitbuffer = require("ffi/blitbuffer")
 local ButtonDialog = require("ui/widget/buttondialog")
+local ButtonTable = require("ui/widget/buttontable")
+local CenterContainer = require("ui/widget/container/centercontainer")
+local Device = require("device")
+local Font = require("ui/font")
+local FrameContainer = require("ui/widget/container/framecontainer")
+local Geom = require("ui/geometry")
 local InfoMessage = require("ui/widget/infomessage")
 local InputDialog = require("ui/widget/inputdialog")
+local InputContainer = require("ui/widget/container/inputcontainer")
+local InputText = require("ui/widget/inputtext")
+local ScrollTextWidget = require("ui/widget/scrolltextwidget")
+local Size = require("ui/size")
+local TitleBar = require("ui/widget/titlebar")
 local UIManager = require("ui/uimanager")
+local VerticalGroup = require("ui/widget/verticalgroup")
+local VerticalSpan = require("ui/widget/verticalspan")
 local WidgetContainer = require("ui/widget/container/widgetcontainer")
 local _ = require("gettext")
 
@@ -13,6 +27,172 @@ local T3Code = WidgetContainer:extend{
     name = "t3code",
     is_doc_only = false,
 }
+
+local function customizeChatKeyboard(input_widget)
+    local keyboard = input_widget and input_widget.keyboard
+    if not keyboard or not keyboard.KEYS or #keyboard.KEYS < 2 then
+        return
+    end
+
+    -- Keep this plugin-local: mutate this input's keyboard instance only.
+    table.remove(keyboard.KEYS, 1)
+    local last_row = keyboard.KEYS[#keyboard.KEYS]
+    local enter_key = last_row and last_row[#last_row]
+    if enter_key then
+        enter_key.label = "Send"
+        enter_key[1], enter_key[2], enter_key[3], enter_key[4] = "\n", "\n", "\n", "\n"
+        enter_key.width = 2.0
+    end
+
+    local keys_height = G_reader_settings:isTrue("keyboard_key_compact") and 48 or 64
+    keyboard.height = Device.screen:scaleBySize(keys_height * #keyboard.KEYS)
+    keyboard:initLayer(keyboard.keyboard_layer)
+end
+
+local T3ChatDialog = InputContainer:extend{
+    is_always_active = true,
+    covers_fullscreen = true,
+    title = "T3 Code",
+    history = "",
+    input_hint = "Type a message",
+    buttons = nil,
+    on_send = nil,
+    on_back = nil,
+    on_close = nil,
+}
+
+function T3ChatDialog:init()
+    local screen_w = Device.screen:getWidth()
+    local screen_h = Device.screen:getHeight()
+    local width = screen_w
+    local title_h
+    local line_h = Device.screen:scaleBySize(36)
+    self.region = Geom:new{ w = screen_w, h = screen_h }
+    self.title_bar = TitleBar:new{
+        width = width,
+        align = "left",
+        with_bottom_line = true,
+        title = self.title,
+        title_multilines = false,
+        left_icon = "chevron.left",
+        left_icon_tap_callback = self.on_back,
+        close_callback = self.on_close,
+        show_parent = self,
+    }
+    title_h = self.title_bar:getHeight()
+
+    self.input_widget = InputText:new{
+        text = "",
+        hint = self.input_hint,
+        face = Font:getFace("x_smallinfofont"),
+        width = width - 2 * Size.padding.large,
+        height = line_h,
+        padding = Size.padding.default,
+        margin = Size.margin.small,
+        scroll = true,
+        cursor_at_end = true,
+        enter_callback = self.on_send,
+        parent = self,
+    }
+    customizeChatKeyboard(self.input_widget)
+
+    if self.buttons then
+        self.button_table = ButtonTable:new{
+            width = width,
+            buttons = self.buttons,
+            zero_sep = true,
+            show_parent = self,
+        }
+    end
+
+    local keyboard_h = self.input_widget:getKeyboardDimen().h
+    local input_h = self.input_widget:getSize().h
+    local buttons_h = self.button_table and self.button_table:getSize().h or 0
+    local history_h = screen_h - keyboard_h - title_h - input_h - buttons_h - Size.padding.large * 2
+    if history_h < line_h * 4 then
+        history_h = line_h * 4
+    end
+
+    self.history_widget = ScrollTextWidget:new{
+        text = self.history ~= "" and self.history or _("No messages yet."),
+        face = Font:getFace("x_smallinfofont"),
+        width = width - 2 * Size.padding.large,
+        height = history_h,
+        dialog = self,
+        scroll_by_pan = true,
+    }
+
+    local widgets = {
+        align = "left",
+        self.title_bar,
+        VerticalSpan:new{ width = Size.padding.small },
+        CenterContainer:new{
+            dimen = Geom:new{ w = width, h = self.history_widget:getSize().h },
+            self.history_widget,
+        },
+        VerticalSpan:new{ width = Size.padding.small },
+        CenterContainer:new{
+            dimen = Geom:new{ w = width, h = input_h },
+            self.input_widget,
+        },
+    }
+    if self.button_table then
+        table.insert(widgets, self.button_table)
+    end
+    self.vgroup = VerticalGroup:new(widgets)
+
+    self.dialog_frame = FrameContainer:new{
+        radius = 0,
+        padding = 0,
+        margin = 0,
+        bordersize = 0,
+        background = Blitbuffer.COLOR_WHITE,
+        self.vgroup,
+    }
+    self[1] = CenterContainer:new{
+        dimen = Geom:new{ w = screen_w, h = screen_h - keyboard_h },
+        ignore_if_over = "height",
+        self.dialog_frame,
+    }
+end
+
+function T3ChatDialog:onShow()
+    UIManager:setDirty(self, "ui")
+end
+
+function T3ChatDialog:onCloseWidget()
+    if self.input_widget then
+        self.input_widget:onCloseWidget()
+    end
+    UIManager:setDirty(nil, "full")
+end
+
+function T3ChatDialog:onShowKeyboard()
+    self.input_widget:onShowKeyboard()
+end
+
+function T3ChatDialog:getInputText()
+    return self.input_widget:getText()
+end
+
+function T3ChatDialog:setInputText(text)
+    self.input_widget:setText(tostring(text or ""))
+end
+
+function T3ChatDialog:setHistory(text)
+    text = tostring(text or "")
+    if text == "" then
+        text = _("No messages yet.")
+    end
+    if #text > 2600 then
+        text = "...\n" .. text:sub(#text - 2600)
+    end
+    self.history = text
+    self.history_widget.text_widget:setText(text)
+    self.history_widget:resetScroll()
+    self.history_widget:scrollToBottom()
+    UIManager:setDirty(self, "ui")
+end
 
 local function showMessage(text)
     UIManager:show(InfoMessage:new{
@@ -294,6 +474,32 @@ function T3Code:onT3CodeAgentSelector(open_chat)
     local ok, body = Transport.new():agents()
     local agents = ok and parseAgentLines(body) or {}
     local buttons = {}
+    table.insert(buttons, {
+        {
+            text = _("Status"),
+            callback = function()
+                showMessage(_("T3 Code") .. "\n" .. Transport.new():status())
+            end,
+        },
+        {
+            text = _("Pair"),
+            callback = function()
+                UIManager:close(dialog)
+                UIManager:nextTick(function()
+                    self:onT3CodePair()
+                end)
+            end,
+        },
+        {
+            text = _("Refresh"),
+            callback = function()
+                UIManager:close(dialog)
+                UIManager:nextTick(function()
+                    self:onT3CodeAgentSelector(open_chat)
+                end)
+            end,
+        },
+    })
     for agent_index, agent in ipairs(agents) do
         local selected_agent = agent
         table.insert(buttons, {
@@ -330,7 +536,7 @@ function T3Code:onT3CodeAgentSelector(open_chat)
                 local custom_dialog
                 custom_dialog = InputDialog:new{
                     title = _("Custom agent"),
-                    input = config.target or "",
+                    input = config.target or "agent",
                     input_hint = _("Agent handle"),
                     buttons = {
                         {
@@ -377,8 +583,8 @@ function T3Code:onT3CodeAgentSelector(open_chat)
         },
     })
     dialog = ButtonDialog:new{
-        title = _("Select T3 agent"),
-        width = 1264,
+        title = _("T3 Code"),
+        width = Device.screen:getWidth(),
         buttons = buttons,
     }
     UIManager:show(dialog)
@@ -394,6 +600,7 @@ function T3Code:onT3CodeChatApp()
     local poll_count = 0
     local last_rendered = nil
     local stream_pid = nil
+    local pending_message = nil
 
     local function stopPolling()
         if poll_task then
@@ -407,12 +614,13 @@ function T3Code:onT3CodeChatApp()
     end
 
     local function refreshChat(keep_prompt)
-        local prompt = keep_prompt and outgoingMessage(dialog:getInputText()) or ""
-        local rendered = chatInputTextWithPrompt(prompt)
+        local prompt = keep_prompt and dialog:getInputText() or ""
+        local rendered = transcriptPreview()
         if rendered ~= last_rendered then
             last_rendered = rendered
-            dialog:setInputText(rendered, nil, false)
+            dialog:setHistory(rendered)
         end
+        dialog:setInputText(prompt)
     end
 
     local function pollChat()
@@ -420,10 +628,13 @@ function T3Code:onT3CodeChatApp()
         poll_count = poll_count + 1
         local frame = latestStreamFrame()
         if frame then
-            local rendered = chatInputTextFromHistory(frame, "")
+            local rendered = frame
             if rendered ~= last_rendered then
-                last_rendered = rendered
-                dialog:setInputText(rendered, nil, false)
+                if not pending_message or rendered:find(pending_message, 1, true) or poll_count > 8 then
+                    pending_message = nil
+                    last_rendered = rendered
+                    dialog:setHistory(rendered)
+                end
             end
         end
         if poll_count < 120 then
@@ -432,101 +643,59 @@ function T3Code:onT3CodeChatApp()
             stopPolling()
         end
     end
-    dialog = InputDialog:new{
+    local function backToAgents()
+        stopPolling()
+        UIManager:close(dialog)
+        UIManager:nextTick(function()
+            self:onT3CodeAgentSelector(true)
+        end)
+    end
+
+    local function sendCurrentMessage()
+        local message = dialog:getInputText():match("^%s*(.-)%s*$")
+        if message == "" then
+            showMessage(_("Message is empty."))
+            return
+        end
+        local ok, response = Transport.new():send(message)
+        Settings.appendTranscript("You: " .. message)
+        Settings.appendTranscript("T3: " .. tostring(response))
+        if not ok then
+            showMessage(tostring(response))
+            return
+        end
+
+        pending_message = message
+        dialog:setInputText("")
+        dialog:setHistory((last_rendered or transcriptPreview()) .. "\n\nYou: " .. message)
+        last_rendered = dialog.history
+
+        stopPolling()
+        poll_count = 0
+        local stream_ok, stream_result = Transport.new():startStream(stream_path, 10)
+        if stream_ok then
+            stream_pid = stream_result
+            poll_task = UIManager:scheduleIn(1, pollChat)
+        else
+            showMessage(tostring(stream_result))
+            poll_task = UIManager:scheduleIn(3, function()
+                refreshChat(false)
+            end)
+        end
+    end
+
+    dialog = T3ChatDialog:new{
         title = chatTitle(),
-        title_bar_left_icon = "chevron.left",
-        title_bar_left_icon_tap_callback = function()
+        history = transcriptPreview(),
+        input_hint = _("> Type a message"),
+        on_send = sendCurrentMessage,
+        on_back = backToAgents,
+        on_close = function()
             stopPolling()
             UIManager:close(dialog)
-            UIManager:nextTick(function()
-                self:onT3CodeAgentSelector(true)
-            end)
         end,
-        fullscreen = true,
-        condensed = true,
-        allow_newline = true,
-        add_nav_bar = true,
-        scroll_by_pan = true,
-        cursor_at_end = true,
-        input = chatInputText(),
-        input_hint = _("> Type a message"),
-        buttons = {
-            {
-                {
-                    text = _("Back"),
-                    callback = function()
-                        stopPolling()
-                        UIManager:close(dialog)
-                        UIManager:nextTick(function()
-                            self:onT3CodeAgentSelector(true)
-                        end)
-                    end,
-                },
-                {
-                    text = _("Pair"),
-                    callback = function()
-                        UIManager:close(dialog)
-                        UIManager:nextTick(function()
-                            self:onT3CodePair()
-                        end)
-                    end,
-                },
-                {
-                    text = _("Status"),
-                    callback = function()
-                        showMessage(_("T3 Code") .. "\n" .. Transport.new():status())
-                    end,
-                },
-                {
-                    text = _("Refresh"),
-                    callback = function()
-                        refreshChat(true)
-                    end,
-                },
-                {
-                    text = _("Send"),
-                    is_enter_default = true,
-                    callback = function()
-                        local message = outgoingMessage(dialog:getInputText())
-                        if message == "" then
-                            showMessage(_("Message is empty."))
-                            return
-                        end
-                        local transport = Transport.new()
-                        local ok, response = transport:send(message)
-                        Settings.appendTranscript("You: " .. message)
-                        Settings.appendTranscript("T3: " .. tostring(response))
-                        if not ok then
-                            showMessage(tostring(response))
-                            return
-                        end
-                        dialog:setInputText(chatInputTextWithPrompt(""), nil, false)
-                        stopPolling()
-                        poll_count = 0
-                        local stream_ok, stream_result = Transport.new():startStream(stream_path, 10)
-                        if stream_ok then
-                            stream_pid = stream_result
-                            poll_task = UIManager:scheduleIn(1, pollChat)
-                        else
-                            showMessage(tostring(stream_result))
-                            poll_task = UIManager:scheduleIn(5, function()
-                                refreshChat(false)
-                            end)
-                        end
-                    end,
-                },
-                {
-                    text = _("Close"),
-                    id = "close",
-                    callback = function()
-                        stopPolling()
-                        UIManager:close(dialog)
-                    end,
-                },
-            },
-        },
     }
-    last_rendered = dialog.input
+    last_rendered = dialog.history
     UIManager:show(dialog)
     dialog:onShowKeyboard()
 end
