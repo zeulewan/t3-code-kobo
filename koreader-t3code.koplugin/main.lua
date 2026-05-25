@@ -28,6 +28,8 @@ local T3Code = WidgetContainer:extend{
     is_doc_only = false,
 }
 
+local max_chat_chars = 20000
+
 local function customizeChatKeyboard(input_widget)
     local keyboard = input_widget and input_widget.keyboard
     if not keyboard or not keyboard.KEYS or #keyboard.KEYS < 2 then
@@ -58,8 +60,8 @@ local function smoothPanScroll(widget)
         if not line_h or line_h <= 0 then
             return true
         end
-        local previous_y = this._t3_last_pan_y or 0
-        local current_y = ges.relative and ges.relative.y or previous_y
+        local current_y = ges.relative and ges.relative.y or 0
+        local previous_y = this._t3_last_pan_y or current_y
         local delta_y = current_y - previous_y
         local lines = math.floor(math.abs(delta_y) / line_h)
         if lines > 0 then
@@ -68,13 +70,16 @@ local function smoothPanScroll(widget)
             else
                 this.text_widget:scrollLines(lines)
             end
+            this._t3_last_pan_y = previous_y + (delta_y > 0 and lines or -lines) * line_h
+            UIManager:setDirty(this.dialog, "fast")
+        elseif not this._t3_last_pan_y then
             this._t3_last_pan_y = current_y
-            this:updateScrollBar(true)
         end
         return true
     end
     widget.onPanReleaseText = function(this)
         this._t3_last_pan_y = nil
+        this:updateScrollBar(true)
         return true
     end
 end
@@ -208,6 +213,7 @@ function T3ChatDialog:init()
         scroll_by_pan = true,
     }
     smoothPanScroll(self.history_widget)
+    self.history_widget:scrollToBottom()
 
     local widgets = {
         align = "left",
@@ -279,8 +285,8 @@ function T3ChatDialog:setHistory(text)
     if text == "" then
         text = _("No messages yet.")
     end
-    if #text > 2600 then
-        text = "...\n" .. text:sub(#text - 2600)
+    if #text > max_chat_chars then
+        text = "...\n" .. text:sub(#text - max_chat_chars)
     end
     self.history = text
     self.history_widget.text_widget:setText(text)
@@ -305,8 +311,8 @@ local function transcriptPreview()
         return _("No messages yet.")
     end
     text = tostring(text):gsub("\t", "  "):gsub("\\n", "\n")
-    if #text > 2600 then
-        text = "...\n" .. text:sub(#text - 2600)
+    if #text > max_chat_chars then
+        text = "...\n" .. text:sub(#text - max_chat_chars)
     end
     return text
 end
@@ -335,8 +341,8 @@ local function chatInputTextFromHistory(history, prompt)
     if history == "" or history == _("No messages yet.") then
         history = ""
     end
-    if #history > 2600 then
-        history = "...\n" .. history:sub(#history - 2600)
+    if #history > max_chat_chars then
+        history = "...\n" .. history:sub(#history - max_chat_chars)
     end
     return history .. prompt_marker .. tostring(prompt or "")
 end
@@ -410,6 +416,13 @@ local function projectGroups(agents)
     end
     table.sort(order)
     return groups, order
+end
+
+local function menuPageSize(reserved_rows)
+    local title_h = Device.screen:scaleBySize(64)
+    local row_h = Device.screen:scaleBySize(58)
+    local available_h = Device.screen:getHeight() - title_h - (reserved_rows or 0) * row_h
+    return math.max(1, math.floor(available_h / row_h))
 end
 
 local function shellQuote(value)
@@ -583,10 +596,13 @@ end
 
 function T3Code:onT3CodeAgentSelector(open_chat, selected_project, page)
     local dialog
+    local function transitionTo(callback)
+        callback()
+        UIManager:close(dialog)
+    end
     local ok, body = Transport.new():agents()
     local agents = ok and parseAgentLines(body) or {}
     local groups, projects = projectGroups(agents)
-    local page_size = 8
     page = page or 1
     local buttons = {}
     table.insert(buttons, {
@@ -599,17 +615,13 @@ function T3Code:onT3CodeAgentSelector(open_chat, selected_project, page)
         {
             text = _("Pair"),
             callback = function()
-                UIManager:close(dialog)
-                UIManager:nextTick(function()
-                    self:onT3CodePair()
-                end)
+                self:onT3CodePair()
             end,
         },
         {
             text = _("Refresh"),
             callback = function()
-                UIManager:close(dialog)
-                UIManager:nextTick(function()
+                transitionTo(function()
                     self:onT3CodeAgentSelector(open_chat, selected_project, page)
                 end)
             end,
@@ -626,12 +638,12 @@ function T3Code:onT3CodeAgentSelector(open_chat, selected_project, page)
         })
     elseif selected_project then
         local project_agents = groups[selected_project] or {}
+        local page_size = menuPageSize(6)
         table.insert(buttons, {
             {
                 text = "< " .. _("Projects"),
                 callback = function()
-                    UIManager:close(dialog)
-                    UIManager:nextTick(function()
+                    transitionTo(function()
                         self:onT3CodeAgentSelector(open_chat)
                     end)
                 end,
@@ -646,11 +658,12 @@ function T3Code:onT3CodeAgentSelector(open_chat, selected_project, page)
                     text = tostring(agent_index) .. ". " .. selected_agent.title .. " [" .. selected_agent.status .. "]",
                     callback = function()
                         saveTarget(selected_agent.id, selected_agent.title)
-                        UIManager:close(dialog)
                         if open_chat then
-                            UIManager:nextTick(function()
+                            transitionTo(function()
                                 self:onT3CodeChatApp()
                             end)
+                        else
+                            UIManager:close(dialog)
                         end
                     end,
                 },
@@ -670,8 +683,7 @@ function T3Code:onT3CodeAgentSelector(open_chat, selected_project, page)
                     text = page > 1 and _("Prev") or " ",
                     callback = function()
                         if page <= 1 then return end
-                        UIManager:close(dialog)
-                        UIManager:nextTick(function()
+                        transitionTo(function()
                             self:onT3CodeAgentSelector(open_chat, selected_project, page - 1)
                         end)
                     end,
@@ -684,8 +696,7 @@ function T3Code:onT3CodeAgentSelector(open_chat, selected_project, page)
                     text = end_index < #project_agents and _("Next") or " ",
                     callback = function()
                         if end_index >= #project_agents then return end
-                        UIManager:close(dialog)
-                        UIManager:nextTick(function()
+                        transitionTo(function()
                             self:onT3CodeAgentSelector(open_chat, selected_project, page + 1)
                         end)
                     end,
@@ -693,6 +704,7 @@ function T3Code:onT3CodeAgentSelector(open_chat, selected_project, page)
             })
         end
     else
+        local page_size = menuPageSize(5)
         local start_index = (page - 1) * page_size + 1
         local end_index = math.min(#projects, start_index + page_size - 1)
         for project_index = start_index, end_index do
@@ -703,8 +715,7 @@ function T3Code:onT3CodeAgentSelector(open_chat, selected_project, page)
                 {
                     text = tostring(project_index) .. ". " .. project_name .. " (" .. tostring(count) .. ")",
                     callback = function()
-                        UIManager:close(dialog)
-                        UIManager:nextTick(function()
+                        transitionTo(function()
                             self:onT3CodeAgentSelector(open_chat, project_name, 1)
                         end)
                     end,
@@ -717,8 +728,7 @@ function T3Code:onT3CodeAgentSelector(open_chat, selected_project, page)
                     text = page > 1 and _("Prev") or " ",
                     callback = function()
                         if page <= 1 then return end
-                        UIManager:close(dialog)
-                        UIManager:nextTick(function()
+                        transitionTo(function()
                             self:onT3CodeAgentSelector(open_chat, nil, page - 1)
                         end)
                     end,
@@ -731,8 +741,7 @@ function T3Code:onT3CodeAgentSelector(open_chat, selected_project, page)
                     text = end_index < #projects and _("Next") or " ",
                     callback = function()
                         if end_index >= #projects then return end
-                        UIManager:close(dialog)
-                        UIManager:nextTick(function()
+                        transitionTo(function()
                             self:onT3CodeAgentSelector(open_chat, nil, page + 1)
                         end)
                     end,
@@ -752,7 +761,6 @@ function T3Code:onT3CodeAgentSelector(open_chat, selected_project, page)
         {
             text = _("Custom"),
             callback = function()
-                UIManager:close(dialog)
                 local config = Settings.load()
                 local custom_dialog
                 custom_dialog = InputDialog:new{
@@ -779,11 +787,12 @@ function T3Code:onT3CodeAgentSelector(open_chat, selected_project, page)
                                 callback = function()
                                     local target = custom_dialog:getInputText()
                                     saveTarget(target, target)
-                                    UIManager:close(custom_dialog)
                                     if open_chat then
-                                        UIManager:nextTick(function()
-                                            self:onT3CodeChatApp()
-                                        end)
+                                        self:onT3CodeChatApp()
+                                        UIManager:close(custom_dialog)
+                                        UIManager:close(dialog)
+                                    else
+                                        UIManager:close(custom_dialog)
                                     end
                                 end,
                             },
@@ -872,10 +881,8 @@ function T3Code:onT3CodeChatApp()
         if dialog then
             dialog:closeKeyboard()
         end
+        self:onT3CodeAgentSelector(true)
         UIManager:close(dialog)
-        UIManager:nextTick(function()
-            self:onT3CodeAgentSelector(true)
-        end)
     end
 
     local function sendCurrentMessage()
