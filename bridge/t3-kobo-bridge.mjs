@@ -313,13 +313,6 @@ function encodeEventLine(event) {
   ].join("\t");
 }
 
-function threadTextEventKind(previousText, nextText) {
-  if (previousText && nextText.startsWith(previousText)) {
-    return "append";
-  }
-  return "replace";
-}
-
 function loadWsRuntime() {
   if (!wsRuntimePromise) {
     wsRuntimePromise = import(`file://${t3CodeRepo.replace(/\/+$/, "")}/packages/client-runtime/src/index.ts`);
@@ -376,31 +369,11 @@ function pushThreadTextIfChanged(state, nextText, forceKind) {
   if (nextText === state.lastText) {
     return;
   }
-  const kind = forceKind ?? threadTextEventKind(state.lastText, nextText);
-  const text = kind === "append" ? nextText.slice(state.lastText.length) : nextText;
   state.lastText = nextText;
   pushThreadEvent(state, {
-    kind,
-    text,
+    kind: forceKind ?? "replace",
+    text: nextText,
   });
-}
-
-function pushThreadAppend(state, text) {
-  if (!text) {
-    return;
-  }
-  state.lastText = `${state.lastText}${text}`;
-  pushThreadEvent(state, {
-    kind: "append",
-    text,
-  });
-}
-
-function seedMessageTextState(state, thread) {
-  state.messageTextById.clear();
-  for (const message of thread.messages) {
-    state.messageTextById.set(message.id, formatMessageEntry(message));
-  }
 }
 
 function waitForThreadEvent(state, since, waitMs) {
@@ -441,7 +414,6 @@ function handleThreadStreamItem(state, item, applyThreadDetailEvent) {
   if (item.kind === "snapshot") {
     state.thread = item.snapshot.thread;
     state.status = threadStatus(state.thread);
-    seedMessageTextState(state, state.thread);
     pushThreadTextIfChanged(state, formatThreadText(state.thread, defaultLimit), "replace");
     return;
   }
@@ -451,9 +423,6 @@ function handleThreadStreamItem(state, item, applyThreadDetailEvent) {
   }
 
   const event = item.event;
-  const isMessageEvent = event.type === "thread.message-sent";
-  const messageId = isMessageEvent ? event.payload.messageId : null;
-  const beforeMessageText = messageId ? (state.messageTextById.get(messageId) ?? "") : "";
   const result = applyThreadDetailEvent(state.thread, event);
   if (result.kind === "deleted") {
     pushThreadEvent(state, {
@@ -470,24 +439,7 @@ function handleThreadStreamItem(state, item, applyThreadDetailEvent) {
 
   state.thread = result.thread;
   state.status = threadStatus(state.thread);
-
-  if (isMessageEvent && messageId) {
-    const message = state.thread.messages.find((entry) => entry.id === messageId);
-    const afterMessageText = message ? formatMessageEntry(message) : "";
-    state.messageTextById.set(messageId, afterMessageText);
-    if (afterMessageText !== beforeMessageText) {
-      if (beforeMessageText && afterMessageText.startsWith(beforeMessageText)) {
-        pushThreadAppend(state, afterMessageText.slice(beforeMessageText.length));
-      } else if (!beforeMessageText) {
-        pushThreadAppend(state, `${state.lastText ? "\n\n" : ""}${afterMessageText}`);
-      } else {
-        pushThreadTextIfChanged(state, formatThreadText(state.thread, defaultLimit), "replace");
-      }
-      return;
-    }
-  }
-
-  pushThreadTextIfChanged(state, formatThreadText(state.thread, defaultLimit));
+  pushThreadTextIfChanged(state, formatThreadText(state.thread, defaultLimit), "replace");
 }
 
 async function ensureThreadStream(target) {
@@ -514,7 +466,6 @@ async function ensureThreadStream(target) {
     nextSeq: 0,
     events: [],
     waiters: new Set(),
-    messageTextById: new Map(),
     lastTouchedAt: Date.now(),
     closed: false,
     transport: null,
@@ -648,20 +599,23 @@ async function handleEvents(url, res) {
   await waitForThreadEvent(state, since, waitMs);
 
   if (since <= 0 && state.lastText) {
-    pushThreadEvent(state, {
+    respond(res, 200, encodeEventLine({
+      seq: state.nextSeq || 1,
       kind: "replace",
       status: state.status,
       text: state.lastText,
-    });
+    }) + "\n");
+    return;
   }
 
   if (since > state.nextSeq && state.lastText) {
-    state.nextSeq = since;
-    pushThreadEvent(state, {
+    respond(res, 200, encodeEventLine({
+      seq: state.nextSeq,
       kind: "replace",
       status: state.status,
       text: state.lastText,
-    });
+    }) + "\n");
+    return;
   }
 
   const events = state.events.filter((event) => event.seq > since);
