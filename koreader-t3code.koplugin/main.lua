@@ -238,6 +238,9 @@ function T3ChatDialog:updateInputLayout(text)
     if self._updating_input_layout then
         return
     end
+    if not self.input_widget or not self.input_container or not self.history_container or not self.vgroup then
+        return
+    end
     local next_h = self:inputBoxHeightForText(text)
     if next_h == self.input_container.dimen.h then
         return
@@ -744,11 +747,11 @@ function T3ChatDialog:init()
         scroll = true,
         cursor_at_end = true,
         enter_callback = self.on_send,
-        edit_callback = function()
-            self:updateInputLayout(self.input_widget:getText())
-        end,
         parent = self,
     }
+    self.input_widget.edit_callback = function()
+        self:updateInputLayout(self.input_widget:getText())
+    end
     self.input_frame_extra_height = self.input_widget:getSize().h - self.input_widget.text_widget:getTextHeight()
     self.input_min_text_height = self:measureInputTextHeight("M")
     self.input_max_text_height = self.input_min_text_height * 4
@@ -849,6 +852,7 @@ end
 
 function T3ChatDialog:setInputText(text)
     self.input_widget:setText(tostring(text or ""))
+    self:updateInputLayout(self.input_widget:getText())
 end
 
 function T3ChatDialog:setHistory(text)
