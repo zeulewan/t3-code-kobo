@@ -171,6 +171,9 @@ local function smoothPanScroll(widget)
         return
     end
     widget.onPanText = function(this, arg, ges)
+        if this.dialog then
+            this.dialog._t3_history_pan_active = true
+        end
         local line_h = this:getLineHeight()
         if not line_h or line_h <= 0 then
             return true
@@ -200,8 +203,14 @@ local function smoothPanScroll(widget)
         return true
     end
     widget.onPanReleaseText = function(this)
+        if this.dialog then
+            this.dialog._t3_history_pan_active = false
+        end
         this._t3_last_pan_y = nil
         this:updateScrollBar(true)
+        if this.dialog and this.dialog._t3_flush_pending_history then
+            this.dialog:_t3_flush_pending_history()
+        end
         return true
     end
 end
@@ -1500,11 +1509,30 @@ function T3Code:onT3CodeChatApp()
         end
     end
 
+    local function flushPendingHistory()
+        if not dialog or not dialog._t3_pending_history then
+            return
+        end
+        local pending = dialog._t3_pending_history
+        dialog._t3_pending_history = nil
+        if pending.text ~= last_rendered then
+            last_rendered = pending.text
+            dialog:setHistory(pending)
+        end
+    end
+
     local function applyRendered(rendered, stick_to_bottom)
         persistRenderedHistory(rendered, currentTarget())
         local display = normalizeRenderedHistory(rendered)
         if display == "" then
             display = _("No messages yet.")
+        end
+        if dialog and dialog._t3_history_pan_active then
+            dialog._t3_pending_history = {
+                text = display,
+                stick_to_bottom = stick_to_bottom,
+            }
+            return
         end
         if display ~= last_rendered then
             last_rendered = display
@@ -1600,6 +1628,7 @@ function T3Code:onT3CodeChatApp()
             UIManager:close(dialog)
         end,
     }
+    dialog._t3_flush_pending_history = flushPendingHistory
     last_rendered = dialog.history
     last_stream_rendered = normalizeRenderedHistory(dialog.history)
     UIManager:show(dialog)
