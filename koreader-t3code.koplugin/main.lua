@@ -228,20 +228,31 @@ function T3MenuDialog:init()
     local content_w = screen_w - 2 * Size.padding.large
     local scrollbar_w = ScrollableContainer:getScrollbarWidth()
     local table_w = content_w - scrollbar_w
-    local top_h = Device.screen:scaleBySize(64)
     local icon_w = Device.screen:scaleBySize(62)
     local title_w = screen_w - icon_w * 3
-    local title = self.title
-    if self.status_text and self.status_text ~= "" then
-        title = title .. "  " .. self.status_text
-    end
+    local title_max_w = title_w - 2 * Size.padding.default
     self.region = Geom:new{ w = screen_w, h = screen_h }
     self.title_widget = TextWidget:new{
-        text = title,
+        text = self.title,
         face = Font:getFace("x_smalltfont"),
         bold = true,
-        max_width = title_w - 2 * Size.padding.default,
+        max_width = title_max_w,
     }
+    self.status_widget = TextWidget:new{
+        text = tostring(self.status_text or ""),
+        face = Font:getFace("xx_smallinfofont"),
+        bold = true,
+        max_width = title_max_w,
+    }
+    self.title_stack = VerticalGroup:new{
+        align = "left",
+        VerticalSpan:new{ width = Size.padding.small },
+        self.title_widget,
+        VerticalSpan:new{ width = Device.screen:scaleBySize(4) },
+        self.status_widget,
+        VerticalSpan:new{ width = Size.padding.small },
+    }
+    local top_h = math.max(Device.screen:scaleBySize(64), self.title_stack:getSize().h)
     self.top_bar = HorizontalGroup:new{
         align = "center",
         allow_mirroring = false,
@@ -256,7 +267,7 @@ function T3MenuDialog:init()
         },
         LeftContainer:new{
             dimen = Geom:new{ w = title_w, h = top_h },
-            self.title_widget,
+            self.title_stack,
         },
         Button:new{
             icon = "cre.render.reload",
