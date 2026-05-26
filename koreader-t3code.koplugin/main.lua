@@ -180,12 +180,19 @@ local function smoothPanScroll(widget)
         local delta_y = current_y - previous_y
         local lines = math.floor(math.abs(delta_y) / line_h)
         if lines > 0 then
+            local before_line = this.text_widget.virtual_line_num
             if delta_y > 0 then
                 this.text_widget:scrollLines(-lines)
             else
                 this.text_widget:scrollLines(lines)
             end
-            this._t3_last_pan_y = previous_y + (delta_y > 0 and lines or -lines) * line_h
+            local after_line = this.text_widget.virtual_line_num
+            local moved_lines = after_line - before_line
+            if moved_lines == 0 or math.abs(moved_lines) < lines then
+                this._t3_last_pan_y = current_y
+            else
+                this._t3_last_pan_y = previous_y - moved_lines * line_h
+            end
             this:updateScrollBar(true)
         elseif not this._t3_last_pan_y then
             this._t3_last_pan_y = current_y
