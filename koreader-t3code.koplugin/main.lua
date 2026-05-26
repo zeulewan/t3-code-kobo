@@ -178,27 +178,32 @@ local function smoothPanScroll(widget)
         if not line_h or line_h <= 0 then
             return true
         end
-        local current_y = ges.relative and ges.relative.y or 0
-        local previous_y = this._t3_last_pan_y or current_y
-        local delta_y = current_y - previous_y
-        local lines = math.floor(math.abs(delta_y) / line_h)
-        if lines > 0 then
-            local before_line = this.text_widget.virtual_line_num
-            if delta_y > 0 then
-                this.text_widget:scrollLines(-lines)
-            else
-                this.text_widget:scrollLines(lines)
-            end
-            local after_line = this.text_widget.virtual_line_num
-            local moved_lines = after_line - before_line
-            if moved_lines == 0 or math.abs(moved_lines) < lines then
-                this._t3_last_pan_y = current_y
-            else
-                this._t3_last_pan_y = previous_y - moved_lines * line_h
-            end
+        if this._t3_pan_start_line == nil then
+            this._t3_pan_start_line = this.text_widget.virtual_line_num or 1
+        end
+        local relative_y = ges.relative and ges.relative.y or 0
+        local raw_lines = relative_y / line_h
+        local delta_lines = 0
+        if raw_lines > 0 then
+            delta_lines = math.floor(raw_lines)
+        elseif raw_lines < 0 then
+            delta_lines = math.ceil(raw_lines)
+        end
+        local max_line = #this.text_widget.vertical_string_list - this.text_widget:getVisLineCount() + 1
+        if max_line < 1 then
+            max_line = 1
+        end
+        local target_line = this._t3_pan_start_line - delta_lines
+        if target_line < 1 then
+            target_line = 1
+        elseif target_line > max_line then
+            target_line = max_line
+        end
+        local current_line = this.text_widget.virtual_line_num or 1
+        local move = target_line - current_line
+        if move ~= 0 then
+            this.text_widget:scrollLines(move)
             this:updateScrollBar(true)
-        elseif not this._t3_last_pan_y then
-            this._t3_last_pan_y = current_y
         end
         return true
     end
@@ -206,7 +211,7 @@ local function smoothPanScroll(widget)
         if this.dialog then
             this.dialog._t3_history_pan_active = false
         end
-        this._t3_last_pan_y = nil
+        this._t3_pan_start_line = nil
         this:updateScrollBar(true)
         if this.dialog and this.dialog._t3_flush_pending_history then
             this.dialog:_t3_flush_pending_history()
