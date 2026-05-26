@@ -823,6 +823,37 @@ local function streamPath()
     return Settings.streamPath(currentTarget())
 end
 
+local function normalizeRenderedHistory(text)
+    text = tostring(text or ""):gsub("%s+$", "")
+    if text == "" or text == _("No messages yet.") then
+        return ""
+    end
+    return text
+end
+
+local function appendHistoryEntry(rendered, entry)
+    local base = normalizeRenderedHistory(rendered)
+    local clean = normalizeRenderedHistory(entry)
+    if clean == "" then
+        return base
+    end
+    if base == "" then
+        return clean
+    end
+    return base .. "\n\n" .. clean
+end
+
+local function displayHistory(rendered, optimistic_anchor, optimistic_tail)
+    local base = normalizeRenderedHistory(rendered)
+    if optimistic_tail ~= "" and optimistic_anchor ~= nil and base == optimistic_anchor then
+        base = appendHistoryEntry(base, optimistic_tail)
+    end
+    if base == "" then
+        return _("No messages yet.")
+    end
+    return base
+end
+
 local function chatInputText()
     local history = transcriptPreview()
     if history == _("No messages yet.") then
@@ -1321,6 +1352,9 @@ function T3Code:onT3CodeChatApp()
     local poll_task
     local poll_count = 0
     local last_rendered = nil
+    local last_stream_rendered = ""
+    local optimistic_anchor = nil
+    local optimistic_tail = ""
     local stream_pid = nil
     local stream_path = streamPath()
 
@@ -1338,6 +1372,12 @@ function T3Code:onT3CodeChatApp()
     local function refreshChat(keep_prompt)
         local prompt = keep_prompt and dialog:getInputText() or ""
         local rendered = transcriptPreview()
+        last_stream_rendered = normalizeRenderedHistory(rendered)
+        if optimistic_tail ~= "" and optimistic_anchor ~= nil and last_stream_rendered ~= optimistic_anchor then
+            optimistic_tail = ""
+            optimistic_anchor = nil
+        end
+        rendered = displayHistory(last_stream_rendered, optimistic_anchor, optimistic_tail)
         if rendered ~= last_rendered then
             last_rendered = rendered
             dialog:setHistory(rendered)
@@ -1350,7 +1390,12 @@ function T3Code:onT3CodeChatApp()
         poll_count = poll_count + 1
         local frame = latestEventFrame(stream_path)
         if frame then
-            local rendered = frame
+            last_stream_rendered = normalizeRenderedHistory(frame)
+            if optimistic_tail ~= "" and optimistic_anchor ~= nil and last_stream_rendered ~= optimistic_anchor then
+                optimistic_tail = ""
+                optimistic_anchor = nil
+            end
+            local rendered = displayHistory(last_stream_rendered, optimistic_anchor, optimistic_tail)
             if rendered ~= last_rendered then
                 last_rendered = rendered
                 dialog:setHistory(rendered)
@@ -1393,15 +1438,32 @@ function T3Code:onT3CodeChatApp()
             showMessage(_("Message is empty."))
             return
         end
+        local target = currentTarget()
+        local user_entry = "You: " .. message
+        Settings.appendTranscript(user_entry, target)
+        if optimistic_anchor == nil then
+            optimistic_anchor = last_stream_rendered
+        end
+        optimistic_tail = appendHistoryEntry(optimistic_tail, user_entry)
+        local optimistic = displayHistory(last_stream_rendered, optimistic_anchor, optimistic_tail)
+        last_rendered = optimistic
+        dialog:setHistory(optimistic)
+        dialog:setInputText("")
+        UIManager:forceRePaint()
+        UIManager:yieldToEPDC()
+
         local ok, response = Transport.new():send(message)
-        Settings.appendTranscript("You: " .. message, currentTarget())
         if not ok then
-            Settings.appendTranscript("T3: " .. tostring(response), currentTarget())
+            local error_entry = "T3: " .. tostring(response)
+            Settings.appendTranscript(error_entry, target)
+            optimistic_tail = appendHistoryEntry(optimistic_tail, error_entry)
+            local rendered = displayHistory(last_stream_rendered, optimistic_anchor, optimistic_tail)
+            last_rendered = rendered
+            dialog:setHistory(rendered)
             showMessage(tostring(response))
             return
         end
 
-        dialog:setInputText("")
         startPolling()
     end
 
@@ -1419,6 +1481,7 @@ function T3Code:onT3CodeChatApp()
         end,
     }
     last_rendered = dialog.history
+    last_stream_rendered = normalizeRenderedHistory(dialog.history)
     UIManager:show(dialog)
     dialog:onShowKeyboard()
     startPolling()
