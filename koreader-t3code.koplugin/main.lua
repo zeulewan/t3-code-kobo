@@ -13,6 +13,7 @@ local InputContainer = require("ui/widget/container/inputcontainer")
 local InputText = require("ui/widget/inputtext")
 local ScrollTextWidget = require("ui/widget/scrolltextwidget")
 local Size = require("ui/size")
+local TextBoxWidget = require("ui/widget/textboxwidget")
 local TitleBar = require("ui/widget/titlebar")
 local UIManager = require("ui/uimanager")
 local VerticalGroup = require("ui/widget/verticalgroup")
@@ -29,6 +30,73 @@ local T3Code = WidgetContainer:extend{
 }
 
 local max_chat_chars = 20000
+
+local function stashMarkdownSpan(spans, value)
+    table.insert(spans, value)
+    return "\30" .. tostring(#spans) .. "\31"
+end
+
+local function restoreMarkdownSpans(text, spans)
+    return (text:gsub("\30(%d+)\31", function(index)
+        return spans[tonumber(index)] or ""
+    end))
+end
+
+local function stripUnderscoreItalics(text)
+    text = text:gsub("([^%w])_([^_%s][^_]-)_([^%w])", "%1%2%3")
+    text = text:gsub("^_([^_%s][^_]-)_([^%w])", "%1%2")
+    text = text:gsub("([^%w])_([^_%s][^_]-)_$", "%1%2")
+    text = text:gsub("^_([^_%s][^_]-)_$", "%1")
+    return text
+end
+
+local function markdownToKoreaderText(text)
+    local spans = {}
+    local bold_start = TextBoxWidget.PTF_BOLD_START
+    local bold_end = TextBoxWidget.PTF_BOLD_END
+
+    text = tostring(text or "")
+    text = text:gsub("`([^`\n]-)`", function(code)
+        return stashMarkdownSpan(spans, code)
+    end)
+    text = text:gsub("!%[([^%]]-)%]%(([^%)]+)%)", "%1 (%2)")
+    text = text:gsub("%[([^%]]-)%]%(([^%)]+)%)", "%1 (%2)")
+
+    text = text:gsub("%*%*%*([^%*]-)%*%*%*", bold_start .. "%1" .. bold_end)
+    text = text:gsub("___([^_]-)___", bold_start .. "%1" .. bold_end)
+    text = text:gsub("%*%*([^%*]-)%*%*", bold_start .. "%1" .. bold_end)
+    text = text:gsub("__([^_]-)__", bold_start .. "%1" .. bold_end)
+
+    -- TextBoxWidget's lightweight PTF has bold only; keep italic emphasis readable.
+    text = text:gsub("%*([^%s%*][^%*]-)%*", "%1")
+    text = stripUnderscoreItalics(text)
+    text = restoreMarkdownSpans(text, spans)
+
+    local lines = {}
+    for line in (text .. "\n"):gmatch("(.-)\n") do
+        local heading = line:match("^%s*#+%s+(.+)$")
+        if heading then
+            table.insert(lines, bold_start .. heading .. bold_end)
+        else
+            table.insert(lines, line:gsub("^%s*>%s?", "| "))
+        end
+    end
+
+    return TextBoxWidget.PTF_HEADER .. table.concat(lines, "\n")
+end
+
+local function setScrollTextMarkdown(scroll_widget, text)
+    local text_widget = scroll_widget and scroll_widget.text_widget
+    if not text_widget then
+        return
+    end
+    text_widget.text = markdownToKoreaderText(text)
+    text_widget.charlist = nil
+    text_widget._ptf_char_is_bold = nil
+    text_widget:free()
+    text_widget:init()
+    scroll_widget:resetScroll()
+end
 
 local function chatKeyboardKeys()
     return {
@@ -245,7 +313,7 @@ function T3ChatDialog:init()
     end
 
     self.history_widget = ScrollTextWidget:new{
-        text = self.history ~= "" and self.history or _("No messages yet."),
+        text = markdownToKoreaderText(self.history ~= "" and self.history or _("No messages yet.")),
         face = Font:getFace("x_smallinfofont"),
         width = width - 2 * Size.padding.large,
         height = history_h,
@@ -329,8 +397,7 @@ function T3ChatDialog:setHistory(text)
         text = "...\n" .. text:sub(#text - max_chat_chars)
     end
     self.history = text
-    self.history_widget.text_widget:setText(text)
-    self.history_widget:resetScroll()
+    setScrollTextMarkdown(self.history_widget, text)
     self.history_widget:scrollToBottom()
     UIManager:setDirty(self, "ui")
 end

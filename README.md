@@ -8,6 +8,7 @@ Lightweight KOReader client for T3 Code. It runs on Kobo through KOReader and ta
 - Opens a minimal chat view with KOReader's keyboard.
 - Sends normal T3 user turns through the bridge.
 - Streams updates through a workstation bridge that subscribes to T3 over WebSocket, then exposes a Kobo-friendly long-poll `/events` endpoint.
+- Renders a small Markdown subset in chat: bold and headings use KOReader's lightweight text formatter; italics/code/links are simplified to readable text.
 
 ## Install
 
@@ -38,6 +39,7 @@ In KOReader, open `T3 Code`, choose `Custom`, and enter:
 - No secrets are stored in the plugin. The bridge creates a local owner session with `t3 auth session issue`.
 - Defaults are generic; set host, port, base dir, and target through environment variables or the plugin pairing screen.
 - If using Tailscale, expose the bridge as raw TCP/HTTP. Do not put Tailscale Serve HTTPS on the same port because Kobo BusyBox `wget` expects plain HTTP.
+- True italic glyphs require KOReader's heavier HTML/MuPDF widget; the current chat viewport intentionally stays on the cheaper text widget for streaming.
 
 ## License
 
