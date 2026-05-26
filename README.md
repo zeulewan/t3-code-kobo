@@ -5,6 +5,8 @@ Lightweight KOReader client for T3 Code. It runs on Kobo through KOReader and ta
 ## What It Does
 
 - Lists active T3 agents/threads.
+- Uses the agent list as the full-screen `T3 Code KOReader Menu`.
+- Groups agents under project folders and shows lightweight status labels.
 - Opens a minimal chat view with KOReader's keyboard.
 - Sends normal T3 user turns through the bridge.
 - Streams updates through a workstation bridge that subscribes to T3 over WebSocket, then exposes a Kobo-friendly long-poll `/events` endpoint.
@@ -26,10 +28,10 @@ cp bridge/t3-kobo-bridge.mjs bridge/start.sh "$HOME/.t3/kobo-bridge/"
 T3_KOBO_BRIDGE_HOST=0.0.0.0 T3_KOBO_T3CODE_REPO=/path/to/t3code "$HOME/.t3/kobo-bridge/start.sh"
 ```
 
-In KOReader, open `T3 Code`, choose `Custom`, and enter:
+In KOReader, open `T3 Code KOReader Menu`, choose an agent from a project folder, or use `Settings`/`Pair` to change the bridge endpoint.
 
 ```text
-<thread-or-agent-name> <bridge-host>:18891
+<thread-or-agent-name> <bridge-host>:18892
 ```
 
 ## Notes

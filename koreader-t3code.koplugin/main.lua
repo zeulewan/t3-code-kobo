@@ -206,36 +206,203 @@ local T3ChatDialog = InputContainer:extend{
 
 local T3MenuDialog = InputContainer:extend{
     covers_fullscreen = true,
-    title = "T3 Code",
+    title = "T3 Code KOReader Menu",
+    subtitle = nil,
+    status_text = nil,
+    crash_text = nil,
     buttons = nil,
     on_close = nil,
+    on_refresh = nil,
+    refresh_interval = nil,
 }
 
 function T3MenuDialog:init()
     local screen_w = Device.screen:getWidth()
     local screen_h = Device.screen:getHeight()
+    local content_w = screen_w - 2 * Size.padding.large
     self.region = Geom:new{ w = screen_w, h = screen_h }
     self.title_bar = TitleBar:new{
         width = screen_w,
         align = "left",
         with_bottom_line = true,
         title = self.title,
+        subtitle = self.subtitle,
         title_multilines = false,
         close_callback = self.on_close,
         show_parent = self,
     }
+    local status_lines = {}
+    if self.status_text and self.status_text ~= "" then
+        table.insert(status_lines, self.status_text)
+    end
+    if self.crash_text and self.crash_text ~= "" then
+        table.insert(status_lines, self.crash_text)
+    end
+    local status_widget
+    if #status_lines > 0 then
+        status_widget = TextBoxWidget:new{
+            text = table.concat(status_lines, "\n"),
+            face = Font:getFace("x_smallinfofont"),
+            bold = true,
+            width = content_w,
+            alignment = "left",
+        }
+    end
     self.button_table = ButtonTable:new{
-        width = screen_w,
+        width = content_w,
         buttons = self.buttons,
+        sep_width = Size.line.medium * 2,
         zero_sep = true,
         show_parent = self,
+    }
+    local widgets = {
+        align = "left",
+        self.title_bar,
+        VerticalSpan:new{ width = Size.padding.default },
+    }
+    if status_widget then
+        table.insert(widgets, CenterContainer:new{
+            dimen = Geom:new{ w = screen_w, h = status_widget:getSize().h },
+            status_widget,
+        })
+        table.insert(widgets, VerticalSpan:new{ width = Size.padding.default })
+    end
+    table.insert(widgets, CenterContainer:new{
+        dimen = Geom:new{ w = screen_w, h = self.button_table:getSize().h },
+        self.button_table,
+    })
+    self.vgroup = VerticalGroup:new(widgets)
+    self.dialog_frame = FrameContainer:new{
+        width = screen_w,
+        height = screen_h,
+        radius = 0,
+        padding = 0,
+        margin = 0,
+        bordersize = 0,
+        background = Blitbuffer.COLOR_WHITE,
+        self.vgroup,
+    }
+    self[1] = self.dialog_frame
+end
+
+function T3MenuDialog:onShow()
+    UIManager:setDirty(nil, "full")
+    if self.on_refresh and self.refresh_interval then
+        UIManager:scheduleIn(self.refresh_interval, self.on_refresh)
+    end
+end
+
+function T3MenuDialog:onCloseWidget()
+    if self.on_refresh then
+        UIManager:unschedule(self.on_refresh)
+    end
+    UIManager:setDirty(nil, "full")
+end
+
+local T3SettingsDialog = InputContainer:extend{
+    covers_fullscreen = true,
+    title = "T3 Code Settings",
+    endpoint = "",
+    transport = "",
+    on_close = nil,
+    on_save = nil,
+}
+
+function T3SettingsDialog:init()
+    local screen_w = Device.screen:getWidth()
+    local screen_h = Device.screen:getHeight()
+    local width = screen_w
+    local line_h = Device.screen:scaleBySize(36)
+    self.region = Geom:new{ w = screen_w, h = screen_h }
+    self.title_bar = TitleBar:new{
+        width = width,
+        align = "left",
+        with_bottom_line = true,
+        title = self.title,
+        subtitle = "Endpoint and transport",
+        title_multilines = false,
+        close_callback = self.on_close,
+        show_parent = self,
+    }
+    self.endpoint_input = InputText:new{
+        text = self.endpoint or "",
+        hint = "100.101.214.44:18892",
+        face = Font:getFace("x_smallinfofont"),
+        width = width - 2 * Size.padding.large,
+        height = line_h,
+        padding = Size.padding.default,
+        margin = Size.margin.small,
+        scroll = true,
+        cursor_at_end = true,
+        parent = self,
+    }
+    self.transport_input = InputText:new{
+        text = self.transport or "http",
+        hint = "http",
+        face = Font:getFace("x_smallinfofont"),
+        width = width - 2 * Size.padding.large,
+        height = line_h,
+        padding = Size.padding.default,
+        margin = Size.margin.small,
+        scroll = true,
+        cursor_at_end = true,
+        parent = self,
+    }
+    self.button_table = ButtonTable:new{
+        width = width - 2 * Size.padding.large,
+        sep_width = Size.line.medium * 2,
+        zero_sep = true,
+        show_parent = self,
+        buttons = {
+            {
+                {
+                    text = "Cancel",
+                    callback = self.on_close,
+                    height = Device.screen:scaleBySize(58),
+                    font_size = 22,
+                    font_bold = true,
+                },
+                {
+                    text = "Save",
+                    callback = function()
+                        if self.on_save then
+                            self.on_save(self.endpoint_input:getText(), self.transport_input:getText())
+                        end
+                    end,
+                    height = Device.screen:scaleBySize(58),
+                    font_size = 22,
+                    font_bold = true,
+                },
+            },
+        },
+    }
+    local label = TextBoxWidget:new{
+        text = "Endpoint\nTransport",
+        face = Font:getFace("x_smallinfofont"),
+        bold = true,
+        width = width - 2 * Size.padding.large,
+        alignment = "left",
     }
     self.vgroup = VerticalGroup:new{
         align = "left",
         self.title_bar,
         VerticalSpan:new{ width = Size.padding.large },
         CenterContainer:new{
-            dimen = Geom:new{ w = screen_w, h = self.button_table:getSize().h },
+            dimen = Geom:new{ w = width, h = label:getSize().h },
+            label,
+        },
+        VerticalSpan:new{ width = Size.padding.default },
+        CenterContainer:new{
+            dimen = Geom:new{ w = width, h = self.endpoint_input:getSize().h },
+            self.endpoint_input,
+        },
+        CenterContainer:new{
+            dimen = Geom:new{ w = width, h = self.transport_input:getSize().h },
+            self.transport_input,
+        },
+        VerticalSpan:new{ width = Size.padding.large },
+        CenterContainer:new{
+            dimen = Geom:new{ w = width, h = self.button_table:getSize().h },
             self.button_table,
         },
     }
@@ -252,11 +419,18 @@ function T3MenuDialog:init()
     self[1] = self.dialog_frame
 end
 
-function T3MenuDialog:onShow()
+function T3SettingsDialog:onShow()
     UIManager:setDirty(nil, "full")
+    self.endpoint_input:onShowKeyboard()
 end
 
-function T3MenuDialog:onCloseWidget()
+function T3SettingsDialog:onCloseWidget()
+    if self.endpoint_input then
+        self.endpoint_input:onCloseWidget()
+    end
+    if self.transport_input then
+        self.transport_input:onCloseWidget()
+    end
     UIManager:setDirty(nil, "full")
 end
 
@@ -275,7 +449,6 @@ function T3ChatDialog:init()
         title_multilines = false,
         left_icon = "chevron.left",
         left_icon_tap_callback = self.on_back,
-        close_callback = self.on_close,
         show_parent = self,
     }
     title_h = self.title_bar:getHeight()
@@ -532,9 +705,43 @@ end
 
 local function menuPageSize(reserved_rows)
     local title_h = Device.screen:scaleBySize(64)
-    local row_h = Device.screen:scaleBySize(58)
+    local row_h = Device.screen:scaleBySize(68)
     local available_h = Device.screen:getHeight() - title_h - (reserved_rows or 0) * row_h
     return math.max(1, math.floor(available_h / row_h))
+end
+
+local function trimText(value)
+    return tostring(value or ""):match("^%s*(.-)%s*$")
+end
+
+local function ellipsize(value, max_len)
+    value = tostring(value or "")
+    if #value <= max_len then
+        return value
+    end
+    return value:sub(1, math.max(1, max_len - 3)) .. "..."
+end
+
+local function menuButton(text, callback, opts)
+    opts = opts or {}
+    return {
+        text = text,
+        callback = callback or function() end,
+        align = opts.align or "left",
+        height = opts.height or Device.screen:scaleBySize(68),
+        font_size = opts.font_size or 24,
+        font_bold = opts.font_bold ~= false,
+        background = opts.background,
+    }
+end
+
+local function toolbarButton(text, callback)
+    return menuButton(text, callback, {
+        align = "center",
+        height = Device.screen:scaleBySize(56),
+        font_size = 20,
+        font_bold = true,
+    })
 end
 
 local function shellQuote(value)
@@ -608,6 +815,37 @@ local function crashTail(path, max_bytes)
     local text = file:read("*a")
     file:close()
     return text
+end
+
+local function crashStatusLine(config)
+    local crash_log = "/mnt/onboard/.adds/koreader/crash.log"
+    local marker = fileSize(crash_log)
+    if not marker or marker == "" then
+        return "Crash telemetry: no crash log"
+    end
+    local tail = crashTail(crash_log, 3000) or ""
+    local looks_like_crash = tail:find("stack traceback", 1, true)
+        or tail:find("Uh oh", 1, true)
+        or tail:find("./luajit:", 1, true)
+    if not looks_like_crash then
+        return "Crash telemetry: no recent crash"
+    end
+    if tostring(config.crash_report_marker or "") == tostring(marker) then
+        return "Crash telemetry: report sent"
+    end
+    return "Crash telemetry: pending restart"
+end
+
+local function menuStatusLine(ok, body)
+    local config = Settings.load()
+    local endpoint = tostring(config.endpoint or "")
+    local target = tostring(config.target_title or config.target or "")
+    local state = ok and "Connected" or "Offline"
+    local detail = ok and ("workstation " .. endpoint) or ellipsize(tostring(body or "could not load agents"), 70)
+    if target ~= "" then
+        return state .. " | " .. detail .. " | selected " .. ellipsize(target, 28)
+    end
+    return state .. " | " .. detail
 end
 
 function T3Code:onDispatcherRegisterActions()
@@ -706,6 +944,38 @@ function T3Code:onT3CodePair()
     dialog:onShowKeyboard()
 end
 
+function T3Code:onT3CodeSettings(return_to_menu)
+    local config = Settings.load()
+    local dialog
+    dialog = T3SettingsDialog:new{
+        endpoint = config.endpoint or "",
+        transport = config.transport or "http",
+        on_close = function()
+            UIManager:close(dialog)
+            if return_to_menu then
+                UIManager:nextTick(function()
+                    self:onT3CodeAgentSelector(true)
+                end)
+            end
+        end,
+        on_save = function(endpoint, transport)
+            config.endpoint = trimText(endpoint)
+            config.transport = trimText(transport)
+            if config.transport == "" then
+                config.transport = "http"
+            end
+            Settings.save(config)
+            UIManager:close(dialog)
+            if return_to_menu then
+                UIManager:nextTick(function()
+                    self:onT3CodeAgentSelector(true)
+                end)
+            end
+        end,
+    }
+    UIManager:show(dialog)
+end
+
 function T3Code:onT3CodeAgentSelector(open_chat, selected_project, page)
     local dialog
     local function transitionTo(callback)
@@ -715,218 +985,177 @@ function T3Code:onT3CodeAgentSelector(open_chat, selected_project, page)
     local ok, body = Transport.new():agents()
     local agents = ok and parseAgentLines(body) or {}
     local groups, projects = projectGroups(agents)
+    local config = Settings.load()
     page = page or 1
     local buttons = {}
     table.insert(buttons, {
-        {
-            text = _("Status"),
-            callback = function()
-                showMessage(_("T3 Code") .. "\n" .. Transport.new():status())
-            end,
-        },
-        {
-            text = _("Pair"),
-            callback = function()
-                self:onT3CodePair()
-            end,
-        },
-        {
-            text = _("Refresh"),
-            callback = function()
-                transitionTo(function()
-                    self:onT3CodeAgentSelector(open_chat, selected_project, page)
-                end)
-            end,
-        },
+        toolbarButton(_("Refresh"), function()
+            transitionTo(function()
+                self:onT3CodeAgentSelector(open_chat, selected_project, page)
+            end)
+        end),
+        toolbarButton(_("Pair"), function()
+            self:onT3CodePair()
+        end),
+    })
+    table.insert(buttons, {
+        toolbarButton(_("Status"), function()
+            showMessage(_("T3 Code") .. "\n" .. Transport.new():status())
+        end),
+        toolbarButton(_("Settings"), function()
+            transitionTo(function()
+                self:onT3CodeSettings(true)
+            end)
+        end),
     })
     if not ok then
         table.insert(buttons, {
-            {
-                text = _("Could not load agents"),
-                callback = function()
-                    showMessage(tostring(body))
-                end,
-            },
+            menuButton(_("Could not load agents"), function()
+                showMessage(tostring(body))
+            end),
         })
     elseif selected_project then
         local project_agents = groups[selected_project] or {}
-        local page_size = menuPageSize(6)
+        local page_size = menuPageSize(5)
         table.insert(buttons, {
-            {
-                text = "< " .. _("Projects"),
-                callback = function()
-                    transitionTo(function()
-                        self:onT3CodeAgentSelector(open_chat)
-                    end)
-                end,
-            },
+            menuButton("< " .. _("Project folders"), function()
+                transitionTo(function()
+                    self:onT3CodeAgentSelector(open_chat)
+                end)
+            end),
         })
         local start_index = (page - 1) * page_size + 1
         local end_index = math.min(#project_agents, start_index + page_size - 1)
         for agent_index = start_index, end_index do
             local selected_agent = project_agents[agent_index]
+            local status = selected_agent.status ~= "" and selected_agent.status or "idle"
             table.insert(buttons, {
-                {
-                    text = tostring(agent_index) .. ". " .. selected_agent.title .. " [" .. selected_agent.status .. "]",
-                    callback = function()
-                        saveTarget(selected_agent.id, selected_agent.title)
-                        if open_chat then
-                            transitionTo(function()
-                                self:onT3CodeChatApp()
-                            end)
-                        else
-                            UIManager:close(dialog)
-                        end
-                    end,
-                },
+                menuButton(ellipsize(selected_agent.title, 54) .. "  [" .. status .. "]", function()
+                    saveTarget(selected_agent.id, selected_agent.title)
+                    if open_chat then
+                        transitionTo(function()
+                            self:onT3CodeChatApp()
+                        end)
+                    else
+                        UIManager:close(dialog)
+                    end
+                end),
             })
         end
         if #project_agents == 0 then
             table.insert(buttons, {
-                {
-                    text = _("No agents in project"),
-                    callback = function() end,
-                },
+                menuButton(_("No agents in project"), function() end),
             })
         end
         if #project_agents > page_size then
             table.insert(buttons, {
-                {
-                    text = page > 1 and _("Prev") or " ",
-                    callback = function()
-                        if page <= 1 then return end
-                        transitionTo(function()
-                            self:onT3CodeAgentSelector(open_chat, selected_project, page - 1)
-                        end)
-                    end,
-                },
-                {
-                    text = _("Page") .. " " .. tostring(page),
-                    callback = function() end,
-                },
-                {
-                    text = end_index < #project_agents and _("Next") or " ",
-                    callback = function()
-                        if end_index >= #project_agents then return end
-                        transitionTo(function()
-                            self:onT3CodeAgentSelector(open_chat, selected_project, page + 1)
-                        end)
-                    end,
-                },
+                toolbarButton(page > 1 and _("Prev") or " ", function()
+                    if page <= 1 then return end
+                    transitionTo(function()
+                        self:onT3CodeAgentSelector(open_chat, selected_project, page - 1)
+                    end)
+                end),
+                toolbarButton(_("Page") .. " " .. tostring(page), function() end),
+                toolbarButton(end_index < #project_agents and _("Next") or " ", function()
+                    if end_index >= #project_agents then return end
+                    transitionTo(function()
+                        self:onT3CodeAgentSelector(open_chat, selected_project, page + 1)
+                    end)
+                end),
             })
         end
     else
-        local page_size = menuPageSize(5)
+        local page_size = menuPageSize(4)
         local start_index = (page - 1) * page_size + 1
         local end_index = math.min(#projects, start_index + page_size - 1)
         for project_index = start_index, end_index do
             local project = projects[project_index]
-            local project_name = project
-            local count = #(groups[project_name] or {})
+            local count = #(groups[project] or {})
             table.insert(buttons, {
-                {
-                    text = tostring(project_index) .. ". " .. project_name .. " (" .. tostring(count) .. ")",
-                    callback = function()
-                        transitionTo(function()
-                            self:onT3CodeAgentSelector(open_chat, project_name, 1)
-                        end)
-                    end,
-                },
+                menuButton("Project: " .. ellipsize(project, 48) .. " (" .. tostring(count) .. ")", function()
+                    transitionTo(function()
+                        self:onT3CodeAgentSelector(open_chat, project, 1)
+                    end)
+                end),
             })
         end
         if #projects > page_size then
             table.insert(buttons, {
-                {
-                    text = page > 1 and _("Prev") or " ",
-                    callback = function()
-                        if page <= 1 then return end
-                        transitionTo(function()
-                            self:onT3CodeAgentSelector(open_chat, nil, page - 1)
-                        end)
-                    end,
-                },
-                {
-                    text = _("Page") .. " " .. tostring(page),
-                    callback = function() end,
-                },
-                {
-                    text = end_index < #projects and _("Next") or " ",
-                    callback = function()
-                        if end_index >= #projects then return end
-                        transitionTo(function()
-                            self:onT3CodeAgentSelector(open_chat, nil, page + 1)
-                        end)
-                    end,
-                },
+                toolbarButton(page > 1 and _("Prev") or " ", function()
+                    if page <= 1 then return end
+                    transitionTo(function()
+                        self:onT3CodeAgentSelector(open_chat, nil, page - 1)
+                    end)
+                end),
+                toolbarButton(_("Page") .. " " .. tostring(page), function() end),
+                toolbarButton(end_index < #projects and _("Next") or " ", function()
+                    if end_index >= #projects then return end
+                    transitionTo(function()
+                        self:onT3CodeAgentSelector(open_chat, nil, page + 1)
+                    end)
+                end),
             })
         end
         if #projects == 0 then
             table.insert(buttons, {
-                {
-                    text = _("No agents"),
-                    callback = function() end,
-                },
+                menuButton(_("No agents"), function() end),
             })
         end
     end
     table.insert(buttons, {
-        {
-            text = _("Custom"),
-            callback = function()
-                local config = Settings.load()
-                local custom_dialog
-                custom_dialog = InputDialog:new{
-                    title = _("Custom agent"),
-                    input = config.target or "agent",
-                    input_hint = _("Agent handle"),
-                    buttons = {
+        menuButton(_("Custom agent"), function()
+            local custom_config = Settings.load()
+            local custom_dialog
+            custom_dialog = InputDialog:new{
+                title = _("Custom agent"),
+                input = custom_config.target or "agent",
+                input_hint = _("Agent handle"),
+                buttons = {
+                    {
                         {
-                            {
-                                text = _("Cancel"),
-                                id = "close",
-                                callback = function()
-                                    UIManager:close(custom_dialog)
-                                    if open_chat then
-                                        UIManager:nextTick(function()
-                                            self:onT3CodeAgentSelector(true, selected_project, page)
-                                        end)
-                                    end
-                                end,
-                            },
-                            {
-                                text = _("Save"),
-                                is_enter_default = true,
-                                callback = function()
-                                    local target = custom_dialog:getInputText()
-                                    saveTarget(target, target)
-                                    if open_chat then
+                            text = _("Cancel"),
+                            id = "close",
+                            callback = function()
+                                UIManager:close(custom_dialog)
+                            end,
+                        },
+                        {
+                            text = _("Save"),
+                            is_enter_default = true,
+                            callback = function()
+                                local target = custom_dialog:getInputText()
+                                saveTarget(target, target)
+                                UIManager:close(custom_dialog)
+                                if open_chat then
+                                    transitionTo(function()
                                         self:onT3CodeChatApp()
-                                        UIManager:close(custom_dialog)
-                                        UIManager:close(dialog)
-                                    else
-                                        UIManager:close(custom_dialog)
-                                    end
-                                end,
-                            },
+                                    end)
+                                end
+                            end,
                         },
                     },
-                }
-                UIManager:show(custom_dialog)
-                custom_dialog:onShowKeyboard()
-            end,
-        },
+                },
+            }
+            UIManager:show(custom_dialog)
+            custom_dialog:onShowKeyboard()
+        end),
     })
-    table.insert(buttons, {
-        {
-            text = "X " .. _("Close"),
-            callback = function()
-                UIManager:close(dialog)
-            end,
-        },
-    })
-    local title = selected_project and ("T3 Code  " .. selected_project) or _("T3 Code")
+    local subtitle = selected_project
+        and ("Project folder: " .. selected_project)
+        or "Project folders and agents"
     dialog = T3MenuDialog:new{
-        title = title,
+        title = "T3 Code KOReader Menu",
+        subtitle = subtitle,
+        status_text = menuStatusLine(ok, body),
+        crash_text = crashStatusLine(config),
+        refresh_interval = 20,
+        on_refresh = function()
+            if dialog then
+                transitionTo(function()
+                    self:onT3CodeAgentSelector(open_chat, selected_project, page)
+                end)
+            end
+        end,
         on_close = function()
             UIManager:close(dialog)
         end,
