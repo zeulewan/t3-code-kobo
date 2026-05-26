@@ -684,10 +684,16 @@ local function showMessage(text)
     })
 end
 
+local function currentTarget()
+    local config = Settings.load()
+    return tostring(config.target or "")
+end
+
 local function transcriptPreview()
+    local target = currentTarget()
     local ok, text = Transport.new():thread(10)
     if not ok then
-        text = Settings.readTranscript()
+        text = Settings.readTranscript(target)
     end
     if text == "" then
         return _("No messages yet.")
@@ -700,7 +706,10 @@ local function transcriptPreview()
 end
 
 local prompt_marker = "\n\n> "
-local stream_path = Settings.base_dir .. "/stream.txt"
+
+local function streamPath()
+    return Settings.streamPath(currentTarget())
+end
 
 local function chatInputText()
     local history = transcriptPreview()
@@ -736,8 +745,8 @@ local function urlDecode(value)
     end))
 end
 
-local function latestEventFrame()
-    local file = io.open(stream_path, "r")
+local function latestEventFrame(path)
+    local file = io.open(path, "r")
     if not file then
         return nil
     end
@@ -867,15 +876,10 @@ end
 local function chatTitle()
     local config = Settings.load()
     local agent = tostring(config.target_title or config.target or "")
-    if #agent > 24 then
-        agent = agent:sub(1, 23) .. "..."
-    end
-    return "T3 Code  " .. agent
-end
-
-local function chatSubtitle()
-    local config = Settings.load()
     local parts = {}
+    if agent ~= "" then
+        table.insert(parts, agent)
+    end
     local project = tostring(config.target_project or "")
     local model = tostring(config.target_model or "")
     local effort = tostring(config.target_effort or "")
@@ -891,6 +895,9 @@ local function chatSubtitle()
     end
     if model ~= "" then
         table.insert(parts, model)
+    end
+    if #parts == 0 then
+        return "Chat"
     end
     return table.concat(parts, "  |  ")
 end
@@ -1019,7 +1026,7 @@ function T3Code:onT3CodeStatus()
 end
 
 function T3Code:onT3CodeTranscript()
-    local text = Settings.readTranscript()
+    local text = Settings.readTranscript(currentTarget())
     if text == "" then
         text = _("No messages yet.")
     end
@@ -1203,6 +1210,7 @@ function T3Code:onT3CodeChatApp()
     local poll_count = 0
     local last_rendered = nil
     local stream_pid = nil
+    local stream_path = streamPath()
 
     local function stopPolling()
         if poll_task then
@@ -1228,7 +1236,7 @@ function T3Code:onT3CodeChatApp()
     local function pollChat()
         poll_task = nil
         poll_count = poll_count + 1
-        local frame = latestEventFrame()
+        local frame = latestEventFrame(stream_path)
         if frame then
             local rendered = frame
             if rendered ~= last_rendered then
@@ -1274,9 +1282,9 @@ function T3Code:onT3CodeChatApp()
             return
         end
         local ok, response = Transport.new():send(message)
-        Settings.appendTranscript("You: " .. message)
+        Settings.appendTranscript("You: " .. message, currentTarget())
         if not ok then
-            Settings.appendTranscript("T3: " .. tostring(response))
+            Settings.appendTranscript("T3: " .. tostring(response), currentTarget())
             showMessage(tostring(response))
             return
         end
@@ -1287,7 +1295,7 @@ function T3Code:onT3CodeChatApp()
 
     dialog = T3ChatDialog:new{
         title = chatTitle(),
-        subtitle = chatSubtitle(),
+        subtitle = nil,
         history = transcriptPreview(),
         input_hint = _("> Type a message"),
         on_send = sendCurrentMessage,

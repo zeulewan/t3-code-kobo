@@ -2,7 +2,6 @@ local Settings = {}
 
 Settings.base_dir = "/mnt/onboard/.adds/t3code-kobo"
 Settings.config_path = Settings.base_dir .. "/settings.lua"
-Settings.transcript_path = Settings.base_dir .. "/transcript.txt"
 
 local defaults = {
     transport = "http",
@@ -66,9 +65,26 @@ function Settings.save(config)
     return true
 end
 
-function Settings.appendTranscript(line)
+local function targetKey(target)
+    local value = tostring(target or ""):match("^%s*(.-)%s*$")
+    if value == "" then
+        value = "default"
+    end
+    value = value:gsub("[^%w%-_]", "_")
+    return value
+end
+
+function Settings.transcriptPath(target)
+    return Settings.base_dir .. "/transcript-" .. targetKey(target) .. ".txt"
+end
+
+function Settings.streamPath(target)
+    return Settings.base_dir .. "/stream-" .. targetKey(target) .. ".txt"
+end
+
+function Settings.appendTranscript(line, target)
     ensureDir()
-    local file = io.open(Settings.transcript_path, "a")
+    local file = io.open(Settings.transcriptPath(target), "a")
     if not file then
         return false
     end
@@ -77,8 +93,8 @@ function Settings.appendTranscript(line)
     return true
 end
 
-function Settings.readTranscript()
-    local file = io.open(Settings.transcript_path, "r")
+function Settings.readTranscript(target)
+    local file = io.open(Settings.transcriptPath(target), "r")
     if not file then
         return ""
     end
