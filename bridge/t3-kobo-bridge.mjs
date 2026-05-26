@@ -277,6 +277,9 @@ function formatMessageEntry(message) {
     return text.length > 0 ? `You: ${text}` : "";
   }
   if (message.role === "assistant") {
+    if (message.streaming) {
+      return "";
+    }
     const text = stripOperationalLines(message.text);
     if (text.length > 0) {
       return conciseText(text, 80000);
