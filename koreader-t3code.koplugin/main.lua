@@ -133,11 +133,11 @@ local function chatKeyboardKeys()
         {
             { label = "", width = 1.5 },
             { "Z", "z", "~", "~" },
-            { "X", "x", "€", "€" },
-            { "C", "c", "£", "£" },
-            { "V", "v", "•", "•" },
-            { "B", "b", "?", "¿" },
-            { "N", "n", "!", "¡" },
+            { "X", "x", ":", ":" },
+            { "C", "c", ";", ";" },
+            { "V", "v", ".", "." },
+            { "B", "b", "/", "/" },
+            { "N", "n", "?", "?" },
             { "M", "m", ",", "." },
             { label = "", width = 1.5 },
         },
@@ -211,6 +211,66 @@ local T3ChatDialog = InputContainer:extend{
     on_back = nil,
     on_close = nil,
 }
+
+function T3ChatDialog:measureInputTextHeight(text)
+    local measure = TextBoxWidget:new{
+        text = tostring(text or ""),
+        face = Font:getFace("x_smallinfofont"),
+        width = self.input_text_width,
+        for_measurement_only = true,
+    }
+    local height = measure:getTextHeight()
+    measure:free(true)
+    return height
+end
+
+function T3ChatDialog:inputBoxHeightForText(text)
+    local text_height = self:measureInputTextHeight(text)
+    if text_height < self.input_min_text_height then
+        text_height = self.input_min_text_height
+    elseif text_height > self.input_max_text_height then
+        text_height = self.input_max_text_height
+    end
+    return text_height + self.input_frame_extra_height
+end
+
+function T3ChatDialog:updateInputLayout(text)
+    if self._updating_input_layout then
+        return
+    end
+    local next_h = self:inputBoxHeightForText(text)
+    if next_h == self.input_container.dimen.h then
+        return
+    end
+
+    self._updating_input_layout = true
+    self.input_widget.height = next_h - self.input_frame_extra_height
+    self.input_widget:initTextBox(self.input_widget:getText())
+    self.input_container.dimen.h = self.input_widget:getSize().h
+
+    local history_h = self.dialog_h - self.keyboard_h - self.title_h - self.input_container.dimen.h - self.buttons_h - Size.padding.large * 2
+    if history_h < self.line_h * 4 then
+        history_h = self.line_h * 4
+    end
+
+    local history_top = self.history_widget.text_widget.virtual_line_num
+    self.history_widget = ScrollTextWidget:new{
+        text = markdownToKoreaderText(self.history ~= "" and self.history or _("No messages yet.")),
+        face = Font:getFace("x_smallinfofont"),
+        width = self.history_width,
+        height = history_h,
+        dialog = self,
+        scroll_by_pan = true,
+        top_line_num = history_top,
+    }
+    smoothPanScroll(self.history_widget)
+    self.history_container.dimen.h = self.history_widget:getSize().h
+    self.history_container[1] = self.history_widget
+
+    self.vgroup:resetLayout()
+    self._updating_input_layout = false
+    UIManager:setDirty(self, "ui")
+end
 
 local T3MenuDialog = InputContainer:extend{
     covers_fullscreen = true,
@@ -653,6 +713,7 @@ function T3ChatDialog:init()
     local width = screen_w
     local title_h
     local line_h = Device.screen:scaleBySize(36)
+    local input_text_width = width - 2 * Size.padding.large
     self.region = Geom:new{ w = screen_w, h = screen_h }
     self.title_bar = TitleBar:new{
         width = width,
@@ -666,20 +727,31 @@ function T3ChatDialog:init()
         show_parent = self,
     }
     title_h = self.title_bar:getHeight()
+    self.title_h = title_h
+    self.line_h = line_h
+    self.dialog_h = screen_h
+    self.input_text_width = input_text_width
+    self.history_width = width - 2 * Size.padding.large
 
     self.input_widget = InputText:new{
         text = "",
         hint = self.input_hint,
         face = Font:getFace("x_smallinfofont"),
-        width = width - 2 * Size.padding.large,
+        width = input_text_width,
         height = line_h,
         padding = Size.padding.default,
         margin = Size.margin.small,
         scroll = true,
         cursor_at_end = true,
         enter_callback = self.on_send,
+        edit_callback = function()
+            self:updateInputLayout(self.input_widget:getText())
+        end,
         parent = self,
     }
+    self.input_frame_extra_height = self.input_widget:getSize().h - self.input_widget.text_widget:getTextHeight()
+    self.input_min_text_height = self:measureInputTextHeight("M")
+    self.input_max_text_height = self.input_min_text_height * 4
     useChatKeyboard(self.input_widget)
 
     if self.buttons then
@@ -694,6 +766,8 @@ function T3ChatDialog:init()
     local keyboard_h = self.input_widget:getKeyboardDimen().h
     local input_h = self.input_widget:getSize().h
     local buttons_h = self.button_table and self.button_table:getSize().h or 0
+    self.keyboard_h = keyboard_h
+    self.buttons_h = buttons_h
     local history_h = screen_h - keyboard_h - title_h - input_h - buttons_h - Size.padding.large * 2
     if history_h < line_h * 4 then
         history_h = line_h * 4
@@ -710,19 +784,21 @@ function T3ChatDialog:init()
     smoothPanScroll(self.history_widget)
     self.history_widget:scrollToBottom()
 
+    self.history_container = CenterContainer:new{
+        dimen = Geom:new{ w = width, h = self.history_widget:getSize().h },
+        self.history_widget,
+    }
+    self.input_container = CenterContainer:new{
+        dimen = Geom:new{ w = width, h = input_h },
+        self.input_widget,
+    }
     local widgets = {
         align = "left",
         self.title_bar,
         VerticalSpan:new{ width = Size.padding.small },
-        CenterContainer:new{
-            dimen = Geom:new{ w = width, h = self.history_widget:getSize().h },
-            self.history_widget,
-        },
+        self.history_container,
         VerticalSpan:new{ width = Size.padding.small },
-        CenterContainer:new{
-            dimen = Geom:new{ w = width, h = input_h },
-            self.input_widget,
-        },
+        self.input_container,
     }
     if self.button_table then
         table.insert(widgets, self.button_table)
