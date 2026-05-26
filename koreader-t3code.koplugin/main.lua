@@ -9,6 +9,7 @@ local Font = require("ui/font")
 local FrameContainer = require("ui/widget/container/framecontainer")
 local Geom = require("ui/geometry")
 local HorizontalGroup = require("ui/widget/horizontalgroup")
+local HorizontalSpan = require("ui/widget/horizontalspan")
 local InfoMessage = require("ui/widget/infomessage")
 local InputDialog = require("ui/widget/inputdialog")
 local InputContainer = require("ui/widget/container/inputcontainer")
@@ -385,26 +386,65 @@ function T3SettingsDialog:init()
     local screen_w = Device.screen:getWidth()
     local screen_h = Device.screen:getHeight()
     local width = screen_w
-    local line_h = Device.screen:scaleBySize(36)
+    local content_w = width - 2 * Size.padding.large
+    local card_padding = Size.padding.large
+    local card_border = Size.line.medium
+    local inner_w = content_w - 2 * (card_padding + card_border)
+    local line_h = Device.screen:scaleBySize(42)
+    local icon_w = Device.screen:scaleBySize(62)
+    local title_w = width - icon_w * 2
     self.region = Geom:new{ w = screen_w, h = screen_h }
-    self.title_bar = TitleBar:new{
-        width = width,
+    self.title_widget = TextWidget:new{
+        text = self.title,
+        face = Font:getFace("x_smalltfont"),
+        bold = true,
+        max_width = title_w - 2 * Size.padding.default,
+    }
+    self.subtitle_widget = TextWidget:new{
+        text = "Pairing, bridge, and transport",
+        face = Font:getFace("xx_smallinfofont"),
+        bold = true,
+        max_width = title_w - 2 * Size.padding.default,
+    }
+    self.title_stack = VerticalGroup:new{
         align = "left",
-        with_bottom_line = true,
-        title = self.title,
-        subtitle = "Endpoint and transport",
-        title_multilines = false,
-        close_callback = self.on_close,
-        show_parent = self,
+        VerticalSpan:new{ width = Size.padding.small },
+        self.title_widget,
+        VerticalSpan:new{ width = Device.screen:scaleBySize(4) },
+        self.subtitle_widget,
+        VerticalSpan:new{ width = Size.padding.small },
+    }
+    local top_h = math.max(Device.screen:scaleBySize(64), self.title_stack:getSize().h)
+    self.top_bar = HorizontalGroup:new{
+        align = "center",
+        allow_mirroring = false,
+        Button:new{
+            icon = "chevron.left",
+            callback = self.on_close,
+            width = icon_w,
+            height = top_h,
+            bordersize = 0,
+            padding = Size.padding.small,
+            show_parent = self,
+        },
+        LeftContainer:new{
+            dimen = Geom:new{ w = title_w, h = top_h },
+            self.title_stack,
+        },
+        HorizontalSpan:new{ width = icon_w },
+    }
+    self.top_line = LineWidget:new{
+        dimen = Geom:new{ w = width, h = Size.line.thick },
+        background = Blitbuffer.COLOR_BLACK,
     }
     self.endpoint_input = InputText:new{
         text = self.endpoint or "",
         hint = "100.101.214.44:18892",
         face = Font:getFace("x_smallinfofont"),
-        width = width - 2 * Size.padding.large,
+        width = inner_w,
         height = line_h,
         padding = Size.padding.default,
-        margin = Size.margin.small,
+        margin = 0,
         scroll = true,
         cursor_at_end = true,
         parent = self,
@@ -413,99 +453,171 @@ function T3SettingsDialog:init()
         text = self.transport or "http",
         hint = "http",
         face = Font:getFace("x_smallinfofont"),
-        width = width - 2 * Size.padding.large,
+        width = inner_w,
         height = line_h,
         padding = Size.padding.default,
-        margin = Size.margin.small,
+        margin = 0,
         scroll = true,
         cursor_at_end = true,
         parent = self,
     }
+
+    local actions_label = TextBoxWidget:new{
+        text = "Actions",
+        face = Font:getFace("x_smallinfofont"),
+        bold = true,
+        width = inner_w,
+        alignment = "left",
+    }
+    local actions_note = TextBoxWidget:new{
+        text = "Pair the Kobo with the workstation bridge or inspect the current bridge status.",
+        face = Font:getFace("xx_smallinfofont"),
+        width = inner_w,
+        alignment = "left",
+    }
     self.action_table = ButtonTable:new{
-        width = width - 2 * Size.padding.large,
+        width = inner_w,
         sep_width = Size.line.medium * 2,
         zero_sep = true,
         show_parent = self,
         buttons = {
             {
                 {
-                    text = "Pair",
+                    text = "Pair Device",
                     callback = self.on_pair,
-                    height = Device.screen:scaleBySize(48),
-                    font_size = 18,
+                    height = Device.screen:scaleBySize(52),
+                    font_size = 19,
                     font_bold = true,
                 },
                 {
-                    text = "Status",
+                    text = "Check Status",
                     callback = self.on_status,
-                    height = Device.screen:scaleBySize(48),
-                    font_size = 18,
+                    height = Device.screen:scaleBySize(52),
+                    font_size = 19,
                     font_bold = true,
                 },
             },
         },
     }
+    self.actions_card = FrameContainer:new{
+        width = content_w,
+        radius = Size.radius.window,
+        bordersize = card_border,
+        padding = card_padding,
+        margin = 0,
+        background = Blitbuffer.COLOR_WHITE,
+        VerticalGroup:new{
+            align = "left",
+            actions_label,
+            VerticalSpan:new{ width = Size.padding.small },
+            actions_note,
+            VerticalSpan:new{ width = Size.padding.default },
+            self.action_table,
+        },
+    }
+
+    local bridge_label = TextBoxWidget:new{
+        text = "Bridge",
+        face = Font:getFace("x_smallinfofont"),
+        bold = true,
+        width = inner_w,
+        alignment = "left",
+    }
+    local bridge_note = TextBoxWidget:new{
+        text = "Choose the bridge endpoint and transport the Kobo should use for T3 Code.",
+        face = Font:getFace("xx_smallinfofont"),
+        width = inner_w,
+        alignment = "left",
+    }
+    local endpoint_label = TextBoxWidget:new{
+        text = "Endpoint",
+        face = Font:getFace("xx_smallinfofont"),
+        bold = true,
+        width = inner_w,
+        alignment = "left",
+    }
+    local transport_label = TextBoxWidget:new{
+        text = "Transport",
+        face = Font:getFace("xx_smallinfofont"),
+        bold = true,
+        width = inner_w,
+        alignment = "left",
+    }
+    self.bridge_card = FrameContainer:new{
+        width = content_w,
+        radius = Size.radius.window,
+        bordersize = card_border,
+        padding = card_padding,
+        margin = 0,
+        background = Blitbuffer.COLOR_WHITE,
+        VerticalGroup:new{
+            align = "left",
+            bridge_label,
+            VerticalSpan:new{ width = Size.padding.small },
+            bridge_note,
+            VerticalSpan:new{ width = Size.padding.default },
+            endpoint_label,
+            VerticalSpan:new{ width = Size.padding.small },
+            self.endpoint_input,
+            VerticalSpan:new{ width = Size.padding.default },
+            transport_label,
+            VerticalSpan:new{ width = Size.padding.small },
+            self.transport_input,
+        },
+    }
+
     self.button_table = ButtonTable:new{
-        width = width - 2 * Size.padding.large,
-        sep_width = Size.line.medium * 2,
+        width = content_w,
+        sep_width = 0,
         zero_sep = true,
         show_parent = self,
         buttons = {
             {
                 {
-                    text = "Cancel",
-                    callback = self.on_close,
-                    height = Device.screen:scaleBySize(58),
-                    font_size = 22,
-                    font_bold = true,
-                },
-                {
-                    text = "Save",
+                    text = "Save Changes",
                     callback = function()
                         if self.on_save then
                             self.on_save(self.endpoint_input:getText(), self.transport_input:getText())
                         end
                     end,
-                    height = Device.screen:scaleBySize(58),
+                    height = Device.screen:scaleBySize(60),
                     font_size = 22,
                     font_bold = true,
+                    align = "center",
                 },
             },
         },
     }
-    local label = TextBoxWidget:new{
-        text = "Endpoint\nTransport",
-        face = Font:getFace("x_smallinfofont"),
-        bold = true,
-        width = width - 2 * Size.padding.large,
+
+    local footer_note = TextBoxWidget:new{
+        text = "Use the back button to leave without saving.",
+        face = Font:getFace("xx_smallinfofont"),
+        width = content_w,
         alignment = "left",
     }
     self.vgroup = VerticalGroup:new{
         align = "left",
-        self.title_bar,
+        self.top_bar,
+        self.top_line,
         VerticalSpan:new{ width = Size.padding.large },
         CenterContainer:new{
-            dimen = Geom:new{ w = width, h = self.action_table:getSize().h },
-            self.action_table,
+            dimen = Geom:new{ w = width, h = self.actions_card:getSize().h },
+            self.actions_card,
         },
         VerticalSpan:new{ width = Size.padding.large },
         CenterContainer:new{
-            dimen = Geom:new{ w = width, h = label:getSize().h },
-            label,
-        },
-        VerticalSpan:new{ width = Size.padding.default },
-        CenterContainer:new{
-            dimen = Geom:new{ w = width, h = self.endpoint_input:getSize().h },
-            self.endpoint_input,
-        },
-        CenterContainer:new{
-            dimen = Geom:new{ w = width, h = self.transport_input:getSize().h },
-            self.transport_input,
+            dimen = Geom:new{ w = width, h = self.bridge_card:getSize().h },
+            self.bridge_card,
         },
         VerticalSpan:new{ width = Size.padding.large },
         CenterContainer:new{
             dimen = Geom:new{ w = width, h = self.button_table:getSize().h },
             self.button_table,
+        },
+        VerticalSpan:new{ width = Size.padding.default },
+        CenterContainer:new{
+            dimen = Geom:new{ w = width, h = footer_note:getSize().h },
+            footer_note,
         },
     }
     self.dialog_frame = FrameContainer:new{
