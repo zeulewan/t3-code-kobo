@@ -212,8 +212,6 @@ local T3MenuDialog = InputContainer:extend{
     crash_text = nil,
     buttons = nil,
     on_close = nil,
-    on_refresh = nil,
-    refresh_interval = nil,
 }
 
 function T3MenuDialog:init()
@@ -287,15 +285,9 @@ end
 
 function T3MenuDialog:onShow()
     UIManager:setDirty(nil, "full")
-    if self.on_refresh and self.refresh_interval then
-        UIManager:scheduleIn(self.refresh_interval, self.on_refresh)
-    end
 end
 
 function T3MenuDialog:onCloseWidget()
-    if self.on_refresh then
-        UIManager:unschedule(self.on_refresh)
-    end
     UIManager:setDirty(nil, "full")
 end
 
@@ -727,6 +719,7 @@ local function menuButton(text, callback, opts)
     return {
         text = text,
         callback = callback or function() end,
+        enabled = opts.enabled,
         align = opts.align or "left",
         height = opts.height or Device.screen:scaleBySize(68),
         font_size = opts.font_size or 24,
@@ -739,7 +732,7 @@ local function toolbarButton(text, callback)
     return menuButton(text, callback, {
         align = "center",
         height = Device.screen:scaleBySize(56),
-        font_size = 20,
+        font_size = 18,
         font_bold = true,
     })
 end
@@ -836,16 +829,14 @@ local function crashStatusLine(config)
     return "Crash telemetry: pending restart"
 end
 
-local function menuStatusLine(ok, body)
-    local config = Settings.load()
-    local endpoint = tostring(config.endpoint or "")
-    local target = tostring(config.target_title or config.target or "")
-    local state = ok and "Connected" or "Offline"
-    local detail = ok and ("workstation " .. endpoint) or ellipsize(tostring(body or "could not load agents"), 70)
-    if target ~= "" then
-        return state .. " | " .. detail .. " | selected " .. ellipsize(target, 28)
+local function menuStatusLine(ok)
+    if ok then
+        return "Connected"
     end
-    return state .. " | " .. detail
+    if body and tostring(body) ~= "" then
+        return "Offline"
+    end
+    return "Offline"
 end
 
 function T3Code:onDispatcherRegisterActions()
@@ -985,7 +976,6 @@ function T3Code:onT3CodeAgentSelector(open_chat, selected_project, page)
     local ok, body = Transport.new():agents()
     local agents = ok and parseAgentLines(body) or {}
     local groups, projects = projectGroups(agents)
-    local config = Settings.load()
     page = page or 1
     local buttons = {}
     table.insert(buttons, {
@@ -997,8 +987,6 @@ function T3Code:onT3CodeAgentSelector(open_chat, selected_project, page)
         toolbarButton(_("Pair"), function()
             self:onT3CodePair()
         end),
-    })
-    table.insert(buttons, {
         toolbarButton(_("Status"), function()
             showMessage(_("T3 Code") .. "\n" .. Transport.new():status())
         end),
@@ -1068,11 +1056,19 @@ function T3Code:onT3CodeAgentSelector(open_chat, selected_project, page)
         local page_size = menuPageSize(4)
         local start_index = (page - 1) * page_size + 1
         local end_index = math.min(#projects, start_index + page_size - 1)
+        table.insert(buttons, {
+            menuButton("Projects", function() end, {
+                enabled = false,
+                height = Device.screen:scaleBySize(42),
+                font_size = 18,
+                font_bold = true,
+            }),
+        })
         for project_index = start_index, end_index do
             local project = projects[project_index]
             local count = #(groups[project] or {})
             table.insert(buttons, {
-                menuButton("Project: " .. ellipsize(project, 48) .. " (" .. tostring(count) .. ")", function()
+                menuButton(ellipsize(project, 52) .. " (" .. tostring(count) .. ")", function()
                     transitionTo(function()
                         self:onT3CodeAgentSelector(open_chat, project, 1)
                     end)
@@ -1146,16 +1142,7 @@ function T3Code:onT3CodeAgentSelector(open_chat, selected_project, page)
     dialog = T3MenuDialog:new{
         title = "T3 Code KOReader Menu",
         subtitle = subtitle,
-        status_text = menuStatusLine(ok, body),
-        crash_text = crashStatusLine(config),
-        refresh_interval = 20,
-        on_refresh = function()
-            if dialog then
-                transitionTo(function()
-                    self:onT3CodeAgentSelector(open_chat, selected_project, page)
-                end)
-            end
-        end,
+        status_text = menuStatusLine(ok),
         on_close = function()
             UIManager:close(dialog)
         end,
