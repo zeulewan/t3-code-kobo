@@ -92,19 +92,6 @@ local function markdownToKoreaderText(text)
     return TextBoxWidget.PTF_HEADER .. table.concat(lines, "\n")
 end
 
-local function setScrollTextMarkdown(scroll_widget, text)
-    local text_widget = scroll_widget and scroll_widget.text_widget
-    if not text_widget then
-        return
-    end
-    text_widget.text = markdownToKoreaderText(text)
-    text_widget.charlist = nil
-    text_widget._ptf_char_is_bold = nil
-    text_widget:free()
-    text_widget:init()
-    scroll_widget:resetScroll()
-end
-
 local function chatKeyboardKeys()
     return {
         {
@@ -166,7 +153,7 @@ local function useChatKeyboard(input_widget)
     keyboard:initLayer(keyboard.keyboard_layer)
 end
 
-local function smoothPanScroll(widget)
+local function installHistoryPanGuard(widget)
     if not widget then
         return
     end
@@ -174,49 +161,17 @@ local function smoothPanScroll(widget)
         if this.dialog then
             this.dialog._t3_history_pan_active = true
         end
-        local line_h = this:getLineHeight()
-        if not line_h or line_h <= 0 then
-            return true
-        end
-        if this._t3_pan_start_line == nil then
-            this._t3_pan_start_line = this.text_widget.virtual_line_num or 1
-        end
-        local relative_y = ges.relative and ges.relative.y or 0
-        local raw_lines = relative_y / line_h
-        local delta_lines = 0
-        if raw_lines > 0 then
-            delta_lines = math.floor(raw_lines)
-        elseif raw_lines < 0 then
-            delta_lines = math.ceil(raw_lines)
-        end
-        local max_line = #this.text_widget.vertical_string_list - this.text_widget:getVisLineCount() + 1
-        if max_line < 1 then
-            max_line = 1
-        end
-        local target_line = this._t3_pan_start_line - delta_lines
-        if target_line < 1 then
-            target_line = 1
-        elseif target_line > max_line then
-            target_line = max_line
-        end
-        local current_line = this.text_widget.virtual_line_num or 1
-        local move = target_line - current_line
-        if move ~= 0 then
-            this.text_widget:scrollLines(move)
-            this:updateScrollBar(true)
-        end
-        return true
+        return ScrollTextWidget.onPanText(this, arg, ges)
     end
-    widget.onPanReleaseText = function(this)
+    widget.onPanReleaseText = function(this, arg, ges)
+        local handled = ScrollTextWidget.onPanReleaseText(this, arg, ges)
         if this.dialog then
             this.dialog._t3_history_pan_active = false
+            if this.dialog._t3_flush_pending_history then
+                this.dialog:_t3_flush_pending_history()
+            end
         end
-        this._t3_pan_start_line = nil
-        this:updateScrollBar(true)
-        if this.dialog and this.dialog._t3_flush_pending_history then
-            this.dialog:_t3_flush_pending_history()
-        end
-        return true
+        return handled
     end
 end
 
@@ -277,24 +232,9 @@ function T3ChatDialog:updateInputLayout(text)
         history_h = self.line_h * 4
     end
     self.history_h = history_h
-
-    local history_top = self.history_widget.text_widget.virtual_line_num
     local stick_to_bottom = self:isHistoryNearBottom()
-    self.history_widget = ScrollTextWidget:new{
-        text = markdownToKoreaderText(self.history ~= "" and self.history or _("No messages yet.")),
-        face = Font:getFace("x_smallinfofont"),
-        width = self.history_width,
-        height = history_h,
-        dialog = self,
-        scroll_by_pan = true,
-        top_line_num = stick_to_bottom and nil or history_top,
-    }
-    smoothPanScroll(self.history_widget)
-    if stick_to_bottom then
-        self.history_widget:scrollToBottom()
-    end
-    self.history_container.dimen.h = self.history_widget:getSize().h
-    self.history_container[1] = self.history_widget
+    local history_top = self.history_widget and self.history_widget.text_widget and self.history_widget.text_widget.virtual_line_num or 1
+    self:rebuildHistoryWidget(stick_to_bottom and nil or history_top, stick_to_bottom)
 
     self.vgroup:resetLayout()
     self._updating_input_layout = false
@@ -317,9 +257,9 @@ function T3ChatDialog:rebuildHistoryWidget(top_line_num, stick_to_bottom)
         height = self.history_h,
         dialog = self,
         scroll_by_pan = true,
-        top_line_num = stick_to_bottom and nil or top_line_num,
+        top_line_num = top_line_num,
     }
-    smoothPanScroll(self.history_widget)
+    installHistoryPanGuard(self.history_widget)
     if stick_to_bottom then
         self.history_widget:scrollToBottom()
     end
@@ -831,7 +771,7 @@ function T3ChatDialog:init()
     end
 
     self.history_h = history_h
-    self:rebuildHistoryWidget(1, true)
+    self:rebuildHistoryWidget(nil, true)
 
     self.history_container = CenterContainer:new{
         dimen = Geom:new{ w = width, h = self.history_widget:getSize().h },
@@ -914,12 +854,12 @@ function T3ChatDialog:setHistory(text)
         text = "...\n" .. text:sub(#text - max_chat_chars)
     end
     self.history = text
-    local history_top = self.history_widget and self.history_widget.text_widget and self.history_widget.text_widget.virtual_line_num or 1
     local stick_to_bottom = opts and opts.stick_to_bottom
     if stick_to_bottom == nil then
         stick_to_bottom = self:isHistoryNearBottom()
     end
-    self:rebuildHistoryWidget(history_top, stick_to_bottom)
+    local history_top = self.history_widget and self.history_widget.text_widget and self.history_widget.text_widget.virtual_line_num or 1
+    self:rebuildHistoryWidget(stick_to_bottom and nil or history_top, stick_to_bottom)
     if self.vgroup then
         self.vgroup:resetLayout()
     end
