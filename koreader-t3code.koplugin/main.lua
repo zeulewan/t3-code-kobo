@@ -186,7 +186,7 @@ local function smoothPanScroll(widget)
                 this.text_widget:scrollLines(lines)
             end
             this._t3_last_pan_y = previous_y + (delta_y > 0 and lines or -lines) * line_h
-            UIManager:setDirty(this.dialog, "fast")
+            this:updateScrollBar(true)
         elseif not this._t3_last_pan_y then
             this._t3_last_pan_y = current_y
         end
@@ -255,8 +255,10 @@ function T3ChatDialog:updateInputLayout(text)
     if history_h < self.line_h * 4 then
         history_h = self.line_h * 4
     end
+    self.history_h = history_h
 
     local history_top = self.history_widget.text_widget.virtual_line_num
+    local stick_to_bottom = self:isHistoryNearBottom()
     self.history_widget = ScrollTextWidget:new{
         text = markdownToKoreaderText(self.history ~= "" and self.history or _("No messages yet.")),
         face = Font:getFace("x_smallinfofont"),
@@ -264,15 +266,46 @@ function T3ChatDialog:updateInputLayout(text)
         height = history_h,
         dialog = self,
         scroll_by_pan = true,
-        top_line_num = history_top,
+        top_line_num = stick_to_bottom and nil or history_top,
     }
     smoothPanScroll(self.history_widget)
+    if stick_to_bottom then
+        self.history_widget:scrollToBottom()
+    end
     self.history_container.dimen.h = self.history_widget:getSize().h
     self.history_container[1] = self.history_widget
 
     self.vgroup:resetLayout()
     self._updating_input_layout = false
     UIManager:setDirty(self, "ui")
+end
+
+function T3ChatDialog:isHistoryNearBottom()
+    if not self.history_widget or not self.history_widget.text_widget then
+        return true
+    end
+    local _low, high = self.history_widget.text_widget:getVisibleHeightRatios()
+    return (high or 1) >= 0.98
+end
+
+function T3ChatDialog:rebuildHistoryWidget(top_line_num, stick_to_bottom)
+    self.history_widget = ScrollTextWidget:new{
+        text = markdownToKoreaderText(self.history ~= "" and self.history or _("No messages yet.")),
+        face = Font:getFace("x_smallinfofont"),
+        width = self.history_width,
+        height = self.history_h,
+        dialog = self,
+        scroll_by_pan = true,
+        top_line_num = stick_to_bottom and nil or top_line_num,
+    }
+    smoothPanScroll(self.history_widget)
+    if stick_to_bottom then
+        self.history_widget:scrollToBottom()
+    end
+    if self.history_container then
+        self.history_container.dimen.h = self.history_widget:getSize().h
+        self.history_container[1] = self.history_widget
+    end
 end
 
 local T3MenuDialog = InputContainer:extend{
@@ -776,16 +809,8 @@ function T3ChatDialog:init()
         history_h = line_h * 4
     end
 
-    self.history_widget = ScrollTextWidget:new{
-        text = markdownToKoreaderText(self.history ~= "" and self.history or _("No messages yet.")),
-        face = Font:getFace("x_smallinfofont"),
-        width = width - 2 * Size.padding.large,
-        height = history_h,
-        dialog = self,
-        scroll_by_pan = true,
-    }
-    smoothPanScroll(self.history_widget)
-    self.history_widget:scrollToBottom()
+    self.history_h = history_h
+    self:rebuildHistoryWidget(1, true)
 
     self.history_container = CenterContainer:new{
         dimen = Geom:new{ w = width, h = self.history_widget:getSize().h },
@@ -856,6 +881,10 @@ function T3ChatDialog:setInputText(text)
 end
 
 function T3ChatDialog:setHistory(text)
+    local opts = type(text) == "table" and text or nil
+    if opts then
+        text = opts.text
+    end
     text = tostring(text or "")
     if text == "" then
         text = _("No messages yet.")
@@ -864,8 +893,15 @@ function T3ChatDialog:setHistory(text)
         text = "...\n" .. text:sub(#text - max_chat_chars)
     end
     self.history = text
-    setScrollTextMarkdown(self.history_widget, text)
-    self.history_widget:scrollToBottom()
+    local history_top = self.history_widget and self.history_widget.text_widget and self.history_widget.text_widget.virtual_line_num or 1
+    local stick_to_bottom = opts and opts.stick_to_bottom
+    if stick_to_bottom == nil then
+        stick_to_bottom = self:isHistoryNearBottom()
+    end
+    self:rebuildHistoryWidget(history_top, stick_to_bottom)
+    if self.vgroup then
+        self.vgroup:resetLayout()
+    end
     UIManager:setDirty(self, "ui")
 end
 
@@ -886,6 +922,8 @@ local function transcriptPreview()
     local ok, text = Transport.new():thread(10)
     if not ok then
         text = Settings.readTranscript(target)
+    else
+        Settings.writeTranscript(text, target)
     end
     if text == "" then
         return _("No messages yet.")
@@ -909,6 +947,10 @@ local function normalizeRenderedHistory(text)
         return ""
     end
     return text
+end
+
+local function persistRenderedHistory(rendered, target)
+    Settings.writeTranscript(normalizeRenderedHistory(rendered), target)
 end
 
 local function appendHistoryEntry(rendered, entry)
@@ -1430,11 +1472,9 @@ end
 function T3Code:onT3CodeChatApp()
     local dialog
     local poll_task
-    local poll_count = 0
+    local resync_task
     local last_rendered = nil
     local last_stream_rendered = ""
-    local optimistic_anchor = nil
-    local optimistic_tail = ""
     local stream_pid = nil
     local stream_path = streamPath()
 
@@ -1443,64 +1483,74 @@ function T3Code:onT3CodeChatApp()
             UIManager:unschedule(poll_task)
             poll_task = nil
         end
+        if resync_task then
+            UIManager:unschedule(resync_task)
+            resync_task = nil
+        end
         if stream_pid then
             Transport.new():stopStream(stream_pid)
             stream_pid = nil
         end
     end
 
-    local function refreshChat(keep_prompt)
+    local function applyRendered(rendered, stick_to_bottom)
+        persistRenderedHistory(rendered, currentTarget())
+        local display = normalizeRenderedHistory(rendered)
+        if display == "" then
+            display = _("No messages yet.")
+        end
+        if display ~= last_rendered then
+            last_rendered = display
+            dialog:setHistory{
+                text = display,
+                stick_to_bottom = stick_to_bottom,
+            }
+        end
+    end
+
+    local function refreshChat(keep_prompt, stick_to_bottom)
         local prompt = keep_prompt and dialog:getInputText() or ""
         local rendered = transcriptPreview()
         last_stream_rendered = normalizeRenderedHistory(rendered)
-        if optimistic_tail ~= "" and optimistic_anchor ~= nil and last_stream_rendered ~= optimistic_anchor then
-            optimistic_tail = ""
-            optimistic_anchor = nil
-        end
-        rendered = displayHistory(last_stream_rendered, optimistic_anchor, optimistic_tail)
-        if rendered ~= last_rendered then
-            last_rendered = rendered
-            dialog:setHistory(rendered)
-        end
+        applyRendered(last_stream_rendered, stick_to_bottom)
         dialog:setInputText(prompt)
     end
 
     local function pollChat()
         poll_task = nil
-        poll_count = poll_count + 1
         local frame = latestEventFrame(stream_path)
         if frame then
             last_stream_rendered = normalizeRenderedHistory(frame)
-            if optimistic_tail ~= "" and optimistic_anchor ~= nil and last_stream_rendered ~= optimistic_anchor then
-                optimistic_tail = ""
-                optimistic_anchor = nil
-            end
-            local rendered = displayHistory(last_stream_rendered, optimistic_anchor, optimistic_tail)
-            if rendered ~= last_rendered then
-                last_rendered = rendered
-                dialog:setHistory(rendered)
-            end
+            applyRendered(last_stream_rendered)
         end
         if stream_pid then
             poll_task = UIManager:scheduleIn(1, pollChat)
         end
     end
 
+    local function scheduleResync(delay)
+        if resync_task then
+            UIManager:unschedule(resync_task)
+            resync_task = nil
+        end
+        resync_task = UIManager:scheduleIn(delay, function()
+            resync_task = nil
+            refreshChat(true)
+            scheduleResync(stream_pid and 6 or 3)
+        end)
+    end
+
     local function startPolling()
-        if stream_pid then
-            return
+        if not stream_pid then
+            local stream_ok, stream_result = Transport.new():startStream(stream_path, 10)
+            if stream_ok then
+                stream_pid = stream_result
+                poll_task = UIManager:scheduleIn(1, pollChat)
+            else
+                showMessage(tostring(stream_result))
+            end
         end
-        poll_count = 0
-        local stream_ok, stream_result = Transport.new():startStream(stream_path, 10)
-        if stream_ok then
-            stream_pid = stream_result
-            poll_task = UIManager:scheduleIn(1, pollChat)
-        else
-            showMessage(tostring(stream_result))
-            poll_task = UIManager:scheduleIn(3, function()
-                refreshChat(false)
-            end)
-        end
+        scheduleResync(stream_pid and 6 or 3)
     end
 
     local function backToAgents()
@@ -1518,33 +1568,16 @@ function T3Code:onT3CodeChatApp()
             showMessage(_("Message is empty."))
             return
         end
-        local target = currentTarget()
-        local user_entry = "You: " .. message
-        Settings.appendTranscript(user_entry, target)
-        if optimistic_anchor == nil then
-            optimistic_anchor = last_stream_rendered
-        end
-        optimistic_tail = appendHistoryEntry(optimistic_tail, user_entry)
-        local optimistic = displayHistory(last_stream_rendered, optimistic_anchor, optimistic_tail)
-        last_rendered = optimistic
-        dialog:setHistory(optimistic)
-        dialog:setInputText("")
-        UIManager:forceRePaint()
-        UIManager:yieldToEPDC()
-
         local ok, response = Transport.new():send(message)
         if not ok then
-            local error_entry = "T3: " .. tostring(response)
-            Settings.appendTranscript(error_entry, target)
-            optimistic_tail = appendHistoryEntry(optimistic_tail, error_entry)
-            local rendered = displayHistory(last_stream_rendered, optimistic_anchor, optimistic_tail)
-            last_rendered = rendered
-            dialog:setHistory(rendered)
             showMessage(tostring(response))
             return
         end
 
+        dialog:setInputText("")
+        refreshChat(true)
         startPolling()
+        scheduleResync(1)
     end
 
     dialog = T3ChatDialog:new{

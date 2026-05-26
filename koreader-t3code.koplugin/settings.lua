@@ -93,6 +93,17 @@ function Settings.appendTranscript(line, target)
     return true
 end
 
+function Settings.writeTranscript(text, target)
+    ensureDir()
+    local file = io.open(Settings.transcriptPath(target), "w")
+    if not file then
+        return false
+    end
+    file:write(tostring(text or ""))
+    file:close()
+    return true
+end
+
 function Settings.readTranscript(target)
     local file = io.open(Settings.transcriptPath(target), "r")
     if not file then
