@@ -9,6 +9,9 @@ local defaults = {
     endpoint = "127.0.0.1:18891",
     target = "",
     target_title = "",
+    target_project = "",
+    target_model = "",
+    target_effort = "",
     pairing_token = "",
 }
 
@@ -45,7 +48,17 @@ function Settings.save(config)
         return false
     end
     file:write("return {\n")
-    for _, key in ipairs({"transport", "endpoint", "target", "target_title", "pairing_token", "crash_report_marker"}) do
+    for _, key in ipairs({
+        "transport",
+        "endpoint",
+        "target",
+        "target_title",
+        "target_project",
+        "target_model",
+        "target_effort",
+        "pairing_token",
+        "crash_report_marker",
+    }) do
         file:write(string.format("    %s = %q,\n", key, tostring(config[key] or "")))
     end
     file:write("}\n")

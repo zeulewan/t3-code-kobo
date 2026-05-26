@@ -191,13 +191,46 @@ function projectTitle(snapshot, projectId) {
   return snapshot.projects.find((project) => project.id === projectId)?.title ?? projectId;
 }
 
+function modelName(thread) {
+  const selection = thread.modelSelection ?? {};
+  return [selection.instanceId, selection.model].filter(Boolean).join("/");
+}
+
+function modelEffort(thread) {
+  const selection = thread.modelSelection ?? {};
+  const direct =
+    selection.effort ??
+    selection.reasoningEffort ??
+    selection.reasoning_effort ??
+    selection.options?.reasoningEffort ??
+    selection.options?.effort;
+  if (direct) {
+    return String(direct);
+  }
+
+  const optionEntries = Array.isArray(selection.options)
+    ? selection.options
+    : Object.entries(selection.options ?? {}).map(([id, value]) => ({ id, value }));
+  for (const option of optionEntries) {
+    const id = String(option?.id ?? option?.key ?? option?.name ?? "").toLowerCase();
+    if (id.includes("effort") || id.includes("reasoning")) {
+      const value = option?.value ?? option?.label ?? option?.title;
+      if (value) {
+        return String(value);
+      }
+    }
+  }
+  return "";
+}
+
 function formatAgentLine(snapshot, thread) {
   return [
     thread.id,
     thread.title.replace(/\s+/g, " "),
     threadStatus(thread),
-    `${thread.modelSelection.instanceId}/${thread.modelSelection.model}`,
+    modelName(thread),
     projectTitle(snapshot, thread.projectId).replace(/\s+/g, " "),
+    modelEffort(thread).replace(/\s+/g, " "),
     thread.updatedAt,
   ].join("\t");
 }
@@ -240,13 +273,13 @@ function stripOperationalLines(text) {
 
 function formatMessageEntry(message) {
   if (message.role === "user") {
-    const text = conciseText(message.text, 4000);
+    const text = conciseText(message.text, 12000);
     return text.length > 0 ? `You: ${text}` : "";
   }
   if (message.role === "assistant") {
     const text = stripOperationalLines(message.text);
     if (text.length > 0) {
-      return conciseText(text, 12000);
+      return conciseText(text, 80000);
     }
   }
   return "";
@@ -559,7 +592,8 @@ async function handleAgents(url, res) {
     id: thread.id,
     title: thread.title,
     status: threadStatus(thread),
-    model: `${thread.modelSelection.instanceId}/${thread.modelSelection.model}`,
+    model: modelName(thread),
+    effort: modelEffort(thread),
     project: projectTitle(snapshot, thread.projectId),
     updatedAt: thread.updatedAt,
   }));
@@ -586,7 +620,9 @@ async function handleThread(url, res) {
         id: thread.id,
         title: thread.title,
         status: threadStatus(thread),
-        model: `${thread.modelSelection.instanceId}/${thread.modelSelection.model}`,
+        model: modelName(thread),
+        effort: modelEffort(thread),
+        project: projectTitle(snapshot, thread.projectId),
         updatedAt: thread.updatedAt,
         messages: thread.messages.slice(-limit).map((message) => ({
           id: message.id,
@@ -610,6 +646,14 @@ async function handleEvents(url, res) {
   const state = await ensureThreadStream(target);
 
   await waitForThreadEvent(state, since, waitMs);
+
+  if (since <= 0 && state.lastText) {
+    pushThreadEvent(state, {
+      kind: "replace",
+      status: state.status,
+      text: state.lastText,
+    });
+  }
 
   if (since > state.nextSeq && state.lastText) {
     state.nextSeq = since;
