@@ -78,7 +78,7 @@ local function markdownToKoreaderText(text)
         if heading then
             table.insert(lines, bold_start .. heading .. bold_end)
         else
-            table.insert(lines, line:gsub("^%s*>%s?", "| "))
+            table.insert(lines, (line:gsub("^%s*>%s?", "| ")))
         end
     end
 
