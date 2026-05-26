@@ -142,7 +142,7 @@ local function chatKeyboardKeys()
             { label = "", width = 1.5 },
         },
         {
-            { label = "⌥", width = 1.5, bold = true, alt_label = "SYM" },
+            { label = "123", width = 1.5, bold = true },
             { label = "_", " ", " ", " ", " ", width = 6.0 },
             { label = "Send", "\n", "\n", "\n", "\n", width = 2.5 },
         },
@@ -156,7 +156,7 @@ local function useChatKeyboard(input_widget)
     end
     keyboard.KEYS = chatKeyboardKeys()
     keyboard.shiftmode_keys = { [""] = true }
-    keyboard.symbolmode_keys = { ["⌥"] = true }
+    keyboard.symbolmode_keys = { ["123"] = true }
     keyboard.utf8mode_keys = {}
     keyboard.umlautmode_keys = {}
     keyboard.min_layer = 1
